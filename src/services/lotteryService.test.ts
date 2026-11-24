@@ -15,7 +15,7 @@ function fakeClient(rpc: ReturnType<typeof vi.fn>, from?: unknown) {
 function completed(): AppData {
   return {
     ...structuredClone(DEFAULT_DATA),
-    winners: [{ participant: { id: "a", name: "Ada", weight: 1 }, drawNumber: 1, timestamp: "2026-11-23T10:00:09Z", mode: "random" }],
+    winners: [{ participant: { id: "a", name: "Ada", weight: 1 }, drawNumber: 1, ticketNumber: 6, timestamp: "2026-11-23T10:00:09Z", mode: "random" }],
   };
 }
 

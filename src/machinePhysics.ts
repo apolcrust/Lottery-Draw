@@ -55,18 +55,28 @@ export function createRng(seed: number): () => number {
   };
 }
 
-export function createSim(colors: readonly string[], rng: () => number = Math.random, count = BALL_COUNT): Sim {
+/** Numbers printed on the machine's balls: random participant numbers from 1..total (unique when possible). */
+export function sampleLabels(total: number, count: number, rng: () => number = Math.random): number[] {
+  const size = Math.max(1, Math.floor(total));
+  if (size <= count) return Array.from({ length: count }, (_, i) => (i % size) + 1);
+  const picked = new Set<number>();
+  while (picked.size < count) picked.add(1 + Math.floor(rng() * size));
+  return [...picked];
+}
+
+export function createSim(colors: readonly string[], rng: () => number = Math.random, count = BALL_COUNT, labels?: readonly number[]): Sim {
   const palette = colors.length ? colors : ["#f4c430"];
   const balls: Ball[] = [];
   for (let i = 0; i < count; i += 1) {
+    const number = labels?.[i] ?? i + 1;
     balls.push({
       x: CHAMBER.left + BALL_RADIUS + rng() * (CHAMBER.right - CHAMBER.left - 2 * BALL_RADIUS),
       y: CHAMBER.floor - 150 + rng() * 140,
       vx: 0, vy: 0, r: BALL_RADIUS,
       k: 0.82 + rng() * 0.36,
       seed: rng() * Math.PI * 2,
-      color: palette[Math.floor(rng() * palette.length)],
-      label: String(i + 1),
+      color: palette[(number - 1) % palette.length],
+      label: String(number).padStart(2, "0"),
       guided: false, atMouth: false,
     });
   }

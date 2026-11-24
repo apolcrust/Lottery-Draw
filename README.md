@@ -33,7 +33,7 @@ Without any `.env.local`, the app runs in **local mode** (one browser, data in I
 3. The machine mixes the balls for the configured duration (3 to 30 s, Settings). Frames 1 to 4 of the GIF loop, so it never freezes.
 4. The ball rises through the tube (GIF frames 5 to 8) and is pulled into focus.
 5. `finish_lottery_draw` records the winner. The database refuses to finish before the configured duration has elapsed, and retrying is safe (no duplicate winner).
-6. The name, congratulation and confetti appear, and Realtime updates every other device.
+6. The winning ball shows the winner's **number on the participant list** (for example 06). The name, congratulation and confetti appear, and Realtime updates every other device. The roster and history on audience screens update only after the reveal.
 
 Other devices watching the event play the same mixing and reveal sequence and show the winner when the result arrives. If the drawing tab is refreshed mid-draw it resumes the same draw; if the network drops after the reveal it offers **Retry** and nothing is lost.
 
@@ -54,7 +54,7 @@ Known trade-off: event rows are readable by anyone holding the project's publish
 
 ## Features
 
-Participants (add, remove, edit names and **weights**, clear, deduplicate, XLSX/XLS/CSV import with worksheet and name/weight column selection, preview, append/replace, export); winners (history, search, export, restore, clear, auto-remove, mode label: random / weighted / operator pick); events (create, list, delete, audience and operator links, live sync); operator console (magic-link sign-in, hidden predetermined-winner shortcut, settings, backup and restore, reset); presentation (fullscreen, music and sound effects, confetti, custom title, responsive layout).
+Participants (add, remove, edit names and **weights**, clear, deduplicate, XLSX/XLS/CSV import with worksheet and name/weight column selection, preview, append/replace, export); winners (history, search, export, restore, clear, auto-remove, the winner's participant number and draw order (how a winner was chosen is shown to the operator only)); events (create, list, delete, audience and operator links, live sync); operator console (magic-link sign-in, hidden predetermined-winner shortcut, settings, backup and restore, reset); presentation (fullscreen, music and sound effects, confetti, custom title, responsive layout).
 
 ## Tests
 

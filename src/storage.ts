@@ -114,7 +114,10 @@ export function validateData(value: unknown, source: DataSource = "backup file")
     const drawNumber = entry.drawNumber ?? entry.spinNumber;
     if (!isParticipant(entry.participant) || typeof drawNumber !== "number" || !Number.isInteger(drawNumber) ||
         typeof entry.timestamp !== "string" || !["random", "weighted", "controlled"].includes(entry.mode as string)) return null;
-    return { participant: entry.participant, drawNumber, timestamp: entry.timestamp, mode: entry.mode };
+    // Older records have no ticketNumber; fall back to the draw order so they still display.
+    const ticketNumber = typeof entry.ticketNumber === "number" && Number.isInteger(entry.ticketNumber) && entry.ticketNumber > 0
+      ? entry.ticketNumber : drawNumber;
+    return { participant: entry.participant, drawNumber, ticketNumber, timestamp: entry.timestamp, mode: entry.mode };
   });
   if (winners.some((winner) => winner === null)) throw new Error(`${sourceLabel} contains an invalid winner record.`);
   const settings = cleanSettings(candidate.settings, sourceLabel);

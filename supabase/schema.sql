@@ -368,6 +368,7 @@ declare
   v_data jsonb;
   v_participants jsonb;
   v_record jsonb;
+  v_ticket bigint;
   v_now timestamptz := pg_catalog.now();
 begin
   select * into v_event from public.lottery_events where id = p_event_id for update;
@@ -396,9 +397,17 @@ begin
   end if;
 
   v_data := v_event.data;
+
+  -- The winner's number on the participant list (before they are removed): this is the number on the ball.
+  select p.ordinality into v_ticket
+  from pg_catalog.jsonb_array_elements(v_data -> 'participants') with ordinality as p(value, ordinality)
+  where p.value ->> 'id' = v_draw.selected_participant ->> 'id'
+  limit 1;
+
   v_record := pg_catalog.jsonb_build_object(
     'participant', v_draw.selected_participant,
     'drawNumber', pg_catalog.jsonb_array_length(coalesce(v_data -> 'winners', '[]'::jsonb)) + 1,
+    'ticketNumber', coalesce(v_ticket, 0),
     'timestamp', v_now,
     'mode', v_draw.mode
   );

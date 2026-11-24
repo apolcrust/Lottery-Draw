@@ -9,8 +9,10 @@ export interface Participant {
 
 export interface Winner {
   participant: Participant;
-  /** 1-based position in the event's draw history (the number shown on the winning ball). */
+  /** 1-based order of this draw in the event's history (first winner = 1). */
   drawNumber: number;
+  /** The winner's number on the participant list at the moment of the draw. This is the number shown on the winning ball. */
+  ticketNumber: number;
   timestamp: string;
   mode: SelectionMode;
 }

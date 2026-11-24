@@ -76,6 +76,6 @@ npm run dev
 
 ## Step 10: Test the machine
 Check that the machine appears (cabinet, glass chamber, balls), the balls tumble for the whole mixing time, one ball rises into the tube, then grows into focus with a number, and finally the winner card and confetti appear.
-To test the predetermined winner: pick a name under **Predetermined winner**, press **Activate one-time pick** (or your shortcut key, default **O**), draw on the audience window: the machine behaves normally and the history labels it *Operator pick*. In DevTools, Network, you will not find that name in any audience response before the reveal.
+To test the predetermined winner: pick a name under **Predetermined winner**, press **Activate one-time pick** (or your shortcut key, default **O**), draw on the audience window: the machine behaves normally and the operator console records it as an operator pick (audience screens never show how a winner was chosen). In DevTools, Network, you will not find that name in any audience response before the reveal.
 
 Continue with `GITHUB_DEPLOYMENT.md` to publish.

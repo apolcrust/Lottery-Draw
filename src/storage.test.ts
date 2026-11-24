@@ -54,6 +54,22 @@ describe("validateData", () => {
   });
 });
 
+describe("winner ticket numbers", () => {
+  const person = { id: "a", name: "Ada", weight: 1 };
+  const base = () => structuredClone(DEFAULT_DATA);
+
+  it("keeps the participant number stored with each winner", () => {
+    const result = validateData({ ...base(), winners: [{ participant: person, drawNumber: 2, ticketNumber: 655, timestamp: "t", mode: "random" }] });
+    expect(result.winners[0].ticketNumber).toBe(655);
+    expect(result.winners[0].drawNumber).toBe(2);
+  });
+
+  it("falls back to the draw order for older records without a participant number", () => {
+    const result = validateData({ ...base(), winners: [{ participant: person, drawNumber: 3, timestamp: "t", mode: "random" }] });
+    expect(result.winners[0].ticketNumber).toBe(3);
+  });
+});
+
 describe("publicEventData", () => {
   it("removes the operator-only predetermined winner", () => {
     const data = { ...structuredClone(DEFAULT_DATA), overrideParticipantId: "x", overrideActivated: true };

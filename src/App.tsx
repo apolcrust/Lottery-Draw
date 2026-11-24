@@ -7,6 +7,8 @@ import {
   Music, Sparkles, Trash2, Trophy, Upload, VolumeX, X,
 } from "lucide-react";
 import { selectWinner } from "./engine";
+import { ballColorFor, formatTicket } from "./ballColors";
+import { formatWinnerTime, winnersInDrawOrder } from "./winnerHistory";
 import { loadData, publicEventData, saveData, validateData } from "./storage";
 import type { AppData, DrawTicket, LotterySettings, Participant, Winner } from "./types";
 import { DEFAULT_DATA, DEFAULT_SETTINGS, MAX_DURATION_SECONDS, MIN_DURATION_SECONDS } from "./types";
@@ -28,7 +30,9 @@ import drawMusicUrl from "./assets/mangarap.mp3?url";
 type Dialog = "participants" | "import" | "settings" | "history" | null;
 type Toast = { id: number; message: string; tone: "success" | "error" };
 type ImportEntry = { name: string; weight: number };
-type RemoteDraw = { mixTimer: number; fallbackTimer: number; mixDone: boolean; winner: Winner | null; revealDone: boolean };
+type RemoteDraw = { mixTimer: number; fallbackTimer: number; mixDone: boolean; winner: Winner | null; data: AppData | null; revealDone: boolean };
+type LocalPick = { participant: Participant; mode: Winner["mode"]; ticketNumber: number };
+type DrawOutcome = { winner: Winner; completed: AppData | null };
 
 function makeParticipant(name: string, weight = 1): Participant {
   return { id: crypto.randomUUID(), name: name.trim(), weight };
@@ -86,7 +90,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [lastWinner, setLastWinner] = useState<Winner | null>(null);
   const [machinePhase, setMachinePhase] = useState<MachinePhase>("idle");
-  const [ballNumber, setBallNumber] = useState(1);
+  const [ballNumber, setBallNumber] = useState<number | null>(null);
+  const winnerListRef = useRef<HTMLUListElement>(null);
   const [recovery, setRecovery] = useState<{ ticket: DrawTicket; message: string } | null>(null);
   const [resumeTicket, setResumeTicket] = useState<DrawTicket | null>(null);
   const [ownedEvents, setOwnedEvents] = useState<OwnedEventSummary[]>([]);
@@ -197,7 +202,7 @@ function App() {
   const showWinner = useCallback((winner: Winner, settings: LotterySettings) => {
     stopMusic();
     lastWinnerKeyRef.current = winnerKey(winner);
-    setBallNumber(winner.drawNumber);
+    setBallNumber(winner.ticketNumber);
     setMachinePhase("revealed");
     setLastWinner(winner);
     if (settings.sound) {
@@ -251,7 +256,12 @@ function App() {
     if (remoteRef.current !== state || !state.winner || !state.revealDone) return;
     window.clearTimeout(state.fallbackTimer);
     remoteRef.current = null;
-    showWinner(state.winner, dataRef.current.settings);
+    // The new roster/history is applied only now, so audience screens never show the winner before the reveal.
+    if (state.data) {
+      receivedDataRef.current = state.data;
+      setData(state.data);
+    }
+    showWinner(state.winner, state.data?.settings ?? dataRef.current.settings);
   }, [showWinner]);
 
   const startRemoteReveal = useCallback((state: RemoteDraw) => {
@@ -283,9 +293,10 @@ function App() {
     const startedAtMs = startedAt ? Date.parse(startedAt) : Number.NaN;
     const total = durationMs ?? dataRef.current.settings.duration * 1000;
     const remaining = Number.isNaN(startedAtMs) ? total : remainingMixMs(startedAtMs, total, Date.now(), skewRef.current);
-    const state: RemoteDraw = { mixTimer: 0, fallbackTimer: 0, mixDone: false, winner: null, revealDone: false };
+    const state: RemoteDraw = { mixTimer: 0, fallbackTimer: 0, mixDone: false, winner: null, data: null, revealDone: false };
     remoteRef.current = state;
     setLastWinner(null);
+    setBallNumber(null);
     setMachinePhase("mixing");
     if (dataRef.current.settings.sound) startMusic(drawMusicEnabled, true);
     state.mixTimer = window.setTimeout(() => startRemoteReveal(state), remaining);
@@ -294,17 +305,19 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startRemoteReveal, drawMusicEnabled]);
 
-  const receiveRemoteWinner = useCallback((winner: Winner) => {
+  const receiveRemoteWinner = useCallback((winner: Winner, nextData: AppData) => {
     if (localDrawRef.current) return;
     let state = remoteRef.current;
     if (!state) {
       // The result arrived before this device saw the draw start: play the reveal straight away.
-      state = { mixTimer: 0, fallbackTimer: 0, mixDone: true, winner: null, revealDone: false };
+      state = { mixTimer: 0, fallbackTimer: 0, mixDone: true, winner: null, data: null, revealDone: false };
       remoteRef.current = state;
       setLastWinner(null);
       startRemoteReveal(state);
     }
     state.winner = winner;
+    state.data = nextData;
+    setBallNumber(winner.ticketNumber);
     finishRemotePresentation(state);
   }, [startRemoteReveal, finishRemotePresentation]);
 
@@ -341,12 +354,13 @@ function App() {
       const latest = receivedData.winners[0];
       const key = winnerKey(latest);
       receivedBroadcastRef.current = true;
-      receivedDataRef.current = receivedData;
-      setData((current) => JSON.stringify(current) === JSON.stringify(receivedData) ? current : receivedData);
       if (latest && key !== lastWinnerKeyRef.current && !localDrawRef.current) {
         lastWinnerKeyRef.current = key;
-        receiveRemoteWinner(latest);
+        receiveRemoteWinner(latest, receivedData); // applied after the reveal
+        return;
       }
+      receivedDataRef.current = receivedData;
+      setData((current) => JSON.stringify(current) === JSON.stringify(receivedData) ? current : receivedData);
     };
     return () => {
       channel.close();
@@ -378,6 +392,12 @@ function App() {
     const keepLocalOverride = merged.overrideParticipantId !== null &&
       incoming.participants.some((person) => person.id === merged.overrideParticipantId);
     if (!keepLocalOverride) { merged.overrideParticipantId = null; merged.overrideActivated = false; }
+    if (!row.isDrawing && latest && key !== lastWinnerKeyRef.current) {
+      // A new winner: the roster and history are applied only after this device has played the reveal.
+      lastWinnerKeyRef.current = key;
+      receiveRemoteWinner(latest, merged);
+      return;
+    }
     receivedDataRef.current = merged;
     setData((current) => JSON.stringify(publicEventData(current)) === JSON.stringify(publicEventData(merged)) &&
       current.overrideParticipantId === merged.overrideParticipantId && current.overrideActivated === merged.overrideActivated
@@ -385,9 +405,6 @@ function App() {
 
     if (row.isDrawing) {
       beginRemoteDraw(row.drawStartedAt, row.drawDurationMs);
-    } else if (key !== lastWinnerKeyRef.current && latest) {
-      lastWinnerKeyRef.current = key;
-      receiveRemoteWinner(latest);
     } else if (remoteRef.current && !remoteRef.current.winner) {
       abortRemotePresentation();
     }
@@ -579,7 +596,7 @@ function App() {
   const newNameAlreadyExists = !isOperator && newName.trim() !== "" && data.participants.some(
     (person) => normalizeParticipantName(person.name) === normalizeParticipantName(newName),
   );
-  const ballColor = data.settings.colors[(ballNumber - 1) % data.settings.colors.length] ?? "#f4c430";
+  const ballColor = ballColorFor(data.settings.colors, ballNumber);
   const drawStatus = machinePhase === "mixing" ? "Mixing the balls…"
     : machinePhase === "revealing" ? "The winning ball is rising…"
       : busy || serverDrawing ? "Preparing the draw…"
@@ -627,42 +644,39 @@ function App() {
   };
 
   // ----- the draw ---------------------------------------------------------------------------------------------------
-  const completeDraw = async (ticket: DrawTicket, local: { participant: Participant; mode: Winner["mode"] } | null) => {
-    const settings = dataRef.current.settings;
+  // Asks the database to finish the draw (or, in local mode, builds the winner record). Does not change what is on screen.
+  const resolveDraw = async (ticket: DrawTicket, local: LocalPick | null): Promise<DrawOutcome> => {
     if (supabase && eventId) {
-      try {
-        const completed = await finishLotteryDraw(supabase, eventId, ticket.drawId);
-        const winner = completed.winners[0];
-        if (!winner) throw new Error("The draw finished without a winner record.");
-        clearPendingDraw(eventId);
-        setRecovery(null);
-        setServerDrawing(false);
-        adoptServerData(completed);
-        showWinner(winner, completed.settings);
-      } catch (error) {
-        const message = errorText(error, "The draw result could not be confirmed.");
-        stopMusic();
-        if (/no longer active|does not belong|no active draw|not found/i.test(message)) {
-          // The draw was cancelled or expired on the server: nothing to retry.
-          clearPendingDraw(eventId);
-          setRecovery(null);
-          setServerDrawing(false);
-          setMachinePhase("idle");
-          notify(message, "error");
-        } else {
-          setMachinePhase("revealed");
-          setRecovery({ ticket, message });
-        }
-      }
-      return;
+      const completed = await finishLotteryDraw(supabase, eventId, ticket.drawId);
+      const winner = completed.winners[0];
+      if (!winner) throw new Error("The draw finished without a winner record.");
+      setBallNumber(winner.ticketNumber); // the number on the winning ball
+      return { winner, completed };
     }
     if (!local) throw new Error("The local draw has no selected participant.");
-    const record: Winner = {
+    const winner: Winner = {
       participant: local.participant,
       drawNumber: dataRef.current.winners.length + 1,
+      ticketNumber: local.ticketNumber,
       timestamp: new Date().toISOString(),
       mode: local.mode,
     };
+    setBallNumber(winner.ticketNumber);
+    return { winner, completed: null };
+  };
+
+  // Puts the finished draw on screen: roster, history and the winner announcement.
+  const applyOutcome = (outcome: DrawOutcome) => {
+    if (outcome.completed && eventId) {
+      clearPendingDraw(eventId);
+      setRecovery(null);
+      setServerDrawing(false);
+      adoptServerData(outcome.completed);
+      showWinner(outcome.winner, outcome.completed.settings);
+      return;
+    }
+    const record = outcome.winner;
+    const settings = dataRef.current.settings;
     setData((state) => ({
       ...state,
       participants: state.settings.autoRemove
@@ -676,12 +690,28 @@ function App() {
     showWinner(record, settings);
   };
 
-  const runDraw = async (ticket: DrawTicket, local: { participant: Participant; mode: Winner["mode"] } | null, resumed: boolean) => {
+  const handleFinishFailure = (ticket: DrawTicket, error: unknown) => {
+    const message = errorText(error, "The draw result could not be confirmed.");
+    stopMusic();
+    if (/no longer active|does not belong|no active draw|not found/i.test(message)) {
+      // The draw was cancelled or expired on the server: nothing to retry.
+      if (eventId) clearPendingDraw(eventId);
+      setRecovery(null);
+      setServerDrawing(false);
+      setMachinePhase("idle");
+      notify(message, "error");
+    } else {
+      setMachinePhase("revealed");
+      setRecovery({ ticket, message });
+    }
+  };
+
+  const runDraw = async (ticket: DrawTicket, local: LocalPick | null, resumed: boolean) => {
     localDrawRef.current = true;
     setBusy(true);
     const settings = dataRef.current.settings;
     try {
-      setBallNumber(dataRef.current.winners.length + 1);
+      setBallNumber(null);
       setMachinePhase("mixing");
       startMusic();
       if (settings.sound && !resumed) {
@@ -694,9 +724,19 @@ function App() {
       await sleep(mixMs);
       if (!mountedRef.current) return;
       setMachinePhase("revealing");
+      // The database finishes the draw while the ball rises, so its number is known when it is pulled into focus.
+      const pending = resolveDraw(ticket, local);
+      pending.catch(() => undefined);
       await waitForReveal();
       if (!mountedRef.current) return;
-      await completeDraw(ticket, local);
+      let outcome: DrawOutcome;
+      try {
+        outcome = await pending;
+      } catch (error) {
+        if (supabase && eventId) { handleFinishFailure(ticket, error); return; }
+        throw error;
+      }
+      applyOutcome(outcome);
     } catch (error) {
       stopMusic();
       setMachinePhase("idle");
@@ -723,7 +763,7 @@ function App() {
     setLastWinner(null);
     setRecovery(null);
     let ticket: DrawTicket;
-    let local: { participant: Participant; mode: Winner["mode"] } | null = null;
+    let local: LocalPick | null = null;
     try {
       if (supabase && eventId) {
         // The database selects the winner and keeps it private; we only receive the draw ticket.
@@ -732,7 +772,7 @@ function App() {
         setServerDrawing(true);
       } else {
         const selection = selectWinner(data.participants, data.overrideParticipantId, data.overrideActivated);
-        local = { participant: data.participants[selection.index], mode: selection.mode };
+        local = { participant: data.participants[selection.index], mode: selection.mode, ticketNumber: selection.index + 1 };
         ticket = {
           drawId: crypto.randomUUID(),
           startedAt: new Date().toISOString(),
@@ -764,7 +804,9 @@ function App() {
     localDrawRef.current = true;
     setBusy(true);
     try {
-      await completeDraw(recovery.ticket, null);
+      applyOutcome(await resolveDraw(recovery.ticket, null));
+    } catch (error) {
+      handleFinishFailure(recovery.ticket, error);
     } finally {
       localDrawRef.current = false;
       setBusy(false);
@@ -1015,9 +1057,11 @@ function App() {
 
   const exportHistory = async () => {
     const XLSX = await import("xlsx");
-    const sheet = XLSX.utils.json_to_sheet(data.winners.map(({ participant, drawNumber, timestamp, mode }) => ({
-      Name: participant.name, "Participant ID": participant.id, "Draw number": drawNumber,
-      Date: new Date(timestamp).toLocaleString(), Mode: mode,
+    const sheet = XLSX.utils.json_to_sheet(winnersInDrawOrder(data.winners).map(({ participant, drawNumber, ticketNumber, timestamp, mode }) => ({
+      "Draw order": drawNumber, "Participant number": ticketNumber, Name: participant.name,
+      Date: new Date(timestamp).toLocaleString(),
+      // how the winner was chosen is shown to the operator only
+      ...(isOperator ? { Mode: mode } : {}),
     })));
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, "Winner history");
@@ -1169,7 +1213,12 @@ function App() {
     }
   };
 
-  const filteredWinners = data.winners.filter((record) =>
+  useEffect(() => {
+    const list = winnerListRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [data.winners.length]);
+
+  const filteredWinners = winnersInDrawOrder(data.winners).filter((record) =>
     record.participant.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
 
   // ----- screens ------------------------------------------------------------------------------------------------------
@@ -1255,7 +1304,7 @@ function App() {
   if (!ready) return <main className="loading-screen"><LoaderCircle className="spin-loader" /><span>Opening your lottery…</span></main>;
 
   const machine = <div className="machine-stage">
-    <LotteryMachine phase={machinePhase} ballLabel={String(ballNumber).padStart(2, "0")} ballColor={ballColor}
+    <LotteryMachine phase={machinePhase} ballLabel={formatTicket(ballNumber)} ballColor={ballColor}
       colors={data.settings.colors}
       participantCount={data.participants.length} onRevealComplete={handleRevealComplete} />
     <div className={`draw-status${drawActive ? " is-active" : ""}`} role="status" aria-live="polite">{drawStatus}</div>
@@ -1267,7 +1316,7 @@ function App() {
   </div>;
 
   const winnerOverlay = lastWinner && <WinnerAnnouncement winner={lastWinner} confetti={data.settings.confetti}
-    autoRemove={data.settings.autoRemove} colors={data.settings.colors} ballColor={data.settings.colors[(lastWinner.drawNumber - 1) % data.settings.colors.length]} onClose={continueFromWinner} />;
+    autoRemove={data.settings.autoRemove} colors={data.settings.colors} ballColor={ballColorFor(data.settings.colors, lastWinner.ticketNumber)} onClose={continueFromWinner} />;
 
   const toastStack = <div className="toast-stack" aria-live="polite">{toasts.map((toast) => <div className={`toast toast-${toast.tone}`} key={toast.id}>
     {toast.tone === "success" ? <Check size={16} /> : <CircleHelp size={16} />}{toast.message}
@@ -1412,9 +1461,11 @@ function App() {
           <div className="history-list">{filteredWinners.map((record) => {
             const isActive = data.participants.some((person) => person.id === record.participant.id);
             return <div className="history-row" key={`${record.drawNumber}-${record.participant.id}-${record.timestamp}`}>
-              <span className="history-number">#{String(record.drawNumber).padStart(2, "0")}</span>
-              <div className="history-person"><strong>{record.participant.name}</strong><span>{new Date(record.timestamp).toLocaleString()}</span></div>
-              <span className={`mode-pill mode-${record.mode}`}>{modeLabel(record.mode)}</span>
+              <span className="history-rank" title="Draw order">{record.drawNumber}</span>
+              <span className={`mini-ball digits-${Math.min(3, String(record.ticketNumber).length)}`} title="Participant number"
+                style={{ ["--ball-color" as string]: ballColorFor(data.settings.colors, record.ticketNumber) }}><b>{formatTicket(record.ticketNumber)}</b></span>
+              <div className="history-person"><strong>{record.participant.name}</strong><span>{formatWinnerTime(record.timestamp)}</span></div>
+              {isOperator && <span className={`mode-pill mode-${record.mode}`}>{modeLabel(record.mode)}</span>}
               {canEditEvent && !isActive && <button className="icon-button restore-icon" disabled={drawLocked} title="Restore to draw" aria-label={`Restore ${record.participant.name}`} onClick={() => restoreWinner(record.participant.id)}><RotateCcw size={15} /></button>}
             </div>;
           })}</div>}
@@ -1466,7 +1517,8 @@ function App() {
               <span className="public-count">{data.participants.length}</span></div>
             {data.participants.length === 0 ? <p className="public-empty-copy">Add names to see them here and in the machine.</p> :
               <ul className="public-participant-list">{data.participants.map((person, index) => <li key={person.id}>
-                <span className="participant-color" style={{ background: data.settings.colors[index % data.settings.colors.length] }} />
+                <span className={`mini-ball mini-ball-sm digits-${Math.min(3, String(index + 1).length)}`}
+                  style={{ ["--ball-color" as string]: ballColorFor(data.settings.colors, index + 1) }}><b>{formatTicket(index + 1)}</b></span>
                 <span>{person.name}</span><small>{person.weight > 1 ? `×${person.weight}` : ""}</small>
               </li>)}</ul>}
             <div className="public-participant-actions">
@@ -1477,8 +1529,11 @@ function App() {
             <div className="public-card-heading"><div><span className="card-overline">DRAW RECORD</span><h2>Winner history</h2></div>
               <span className="public-count">{data.winners.length}</span></div>
             {data.winners.length === 0 ? <p className="public-empty-copy">Winners will appear here after the first draw.</p> :
-              <ul className="public-winner-list">{data.winners.slice(0, 5).map((winner) => <li key={`${winner.drawNumber}-${winner.participant.id}-${winner.timestamp}`}>
-                <div><strong>{winner.participant.name}</strong><small>#{String(winner.drawNumber).padStart(2, "0")} · {new Date(winner.timestamp).toLocaleString()}</small></div>
+              <ul className="public-winner-list" ref={winnerListRef}>{winnersInDrawOrder(data.winners).map((winner) => <li key={`${winner.drawNumber}-${winner.participant.id}-${winner.timestamp}`}>
+                <span className="history-rank" title="Draw order">{winner.drawNumber}</span>
+                <span className={`mini-ball digits-${Math.min(3, String(winner.ticketNumber).length)}`} title="Participant number"
+                  style={{ ["--ball-color" as string]: ballColorFor(data.settings.colors, winner.ticketNumber) }}><b>{formatTicket(winner.ticketNumber)}</b></span>
+                <div><strong>{winner.participant.name}</strong><small>{formatWinnerTime(winner.timestamp)}</small></div>
               </li>)}</ul>}
             {data.winners.length > 0 && <button className="button button-quiet public-detail-action" onClick={() => setDialog("history")}><History size={15} /> View all winners</button>}
           </section>
@@ -1568,7 +1623,7 @@ function App() {
               onClick={activateOverride}>
               <Check size={15} />{data.overrideActivated ? "One-time pick is armed" : "Activate one-time pick"}
             </button>
-            <div className="mode-note"><LockKeyhole size={13} /> Audience results identify operator-selected winners after the reveal.</div>
+            <div className="mode-note"><LockKeyhole size={13} /> How each winner was chosen is shown here in the operator console only, never to the audience.</div>
           </div>
 
           <div className="panel-card stats-card">

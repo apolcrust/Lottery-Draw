@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { FOCUS_MS, REVEAL_RISE_MS, type MachinePhase } from "../machineTimeline";
 import {
-  beginReveal, BALL_RADIUS, CHAMBER, createSim, LOGICAL_HEIGHT, LOGICAL_WIDTH, settleSim, stepSim, TUBE, TUBE_CENTER_X,
+  beginReveal, BALL_COUNT, BALL_RADIUS, CHAMBER, createSim, LOGICAL_HEIGHT, LOGICAL_WIDTH, sampleLabels, settleSim, stepSim, TUBE, TUBE_CENTER_X,
   type Ball, type Sim,
 } from "../machinePhysics";
 
 interface LotteryMachineProps {
   phase: MachinePhase;
-  /** Number printed on the winning ball (the draw number). Never contains the winner's identity. */
+  /** Number printed on the winning ball: the winner's number on the participant list ("?" until known). */
   ballLabel: string;
   ballColor: string;
   /** Colours of the balls in the machine. */
@@ -152,7 +152,7 @@ function makeSprite(color: string, label: string, scale: number): HTMLCanvasElem
   ctx.fillStyle = "#ffffff";
   ctx.beginPath(); ctx.arc(c, c, r * 0.55, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = "#17141a";
-  ctx.font = `800 ${Math.round(r * (label.length > 1 ? 0.62 : 0.78))}px "DM Sans", system-ui, sans-serif`;
+  ctx.font = `800 ${Math.round(r * (label.length >= 3 ? 0.46 : label.length === 2 ? 0.62 : 0.78))}px "DM Sans", system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, c, c + r * 0.04);
@@ -181,6 +181,8 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   const labelRef = useRef({ ballLabel, ballColor });
   labelRef.current = { ballLabel, ballColor };
   const colorsKey = colors.join("|");
+  const countRef = useRef(participantCount);
+  countRef.current = participantCount;
   const completeRef = useRef(onRevealComplete);
   completeRef.current = onRevealComplete;
   const [focus, setFocus] = useState<"off" | "animating" | "done">("off");
@@ -230,7 +232,8 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   };
 
   const rebuildPile = () => {
-    const sim = createSim(colors);
+    // the balls carry random participant numbers, coloured like the participant's marker on the list
+    const sim = createSim(colors, Math.random, BALL_COUNT, sampleLabels(Math.max(1, countRef.current), BALL_COUNT));
     settleSim(sim);
     simRef.current = sim;
     spritesRef.current = new Map();
@@ -274,14 +277,25 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // a new palette means a new set of balls
+  // a new palette or a different number of participants means a new set of balls
   useEffect(() => {
     if (phaseRef.current === "idle" || phaseRef.current === "revealed") {
       rebuildPile();
       draw();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorsKey]);
+  }, [colorsKey, participantCount]);
+
+  // the winner's number can arrive while the ball is already rising: update the ball in the tube
+  useEffect(() => {
+    const sim = simRef.current;
+    if (!sim?.chosen || (phaseRef.current !== "revealing" && phaseRef.current !== "revealed")) return;
+    sim.chosen.label = ballLabel;
+    sim.chosen.color = ballColor;
+    spritesRef.current.delete(sim.chosen);
+    if (!rafRef.current) draw();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ballLabel, ballColor]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -356,7 +370,7 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
     style={{ ["--ball-color" as string]: ballColor, ["--focus-ms" as string]: `${FOCUS_MS}ms` }}>
     <div className="machine-glow" aria-hidden="true" />
     <canvas ref={canvasRef} className="machine-art" role="img" aria-label={label} />
-    {focused && <div className={`focus-ball focus-${focus}`} aria-hidden="true">
+    {focused && <div className={`focus-ball focus-${focus} digits-${Math.min(3, ballLabel.length)}`} aria-hidden="true">
       <span className="focus-ball-number">{ballLabel}</span>
     </div>}
   </div>;

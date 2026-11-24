@@ -419,7 +419,6 @@ button:not(:disabled), select:not(:disabled), label.file-button { cursor: pointe
 .winner-ball span { width: 54%; aspect-ratio: 1; display: grid; place-items: center; border-radius: 50%; color: #17141a; background: #fff; font: 800 24px/1 "DM Sans", system-ui, sans-serif; }
 @keyframes ball-pop { from { transform: scale(.2) translateY(-60px); opacity: 0; } to { transform: scale(1) translateY(0); opacity: 1; } }
 .winner-icon { display: none; }
-.winner-mode { margin: 4px 0 0; color: #a99f94; font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 
 /* participant weights, events list */
 .weight-input { width: 74px !important; flex: none; text-align: center; }
@@ -439,4 +438,34 @@ button:not(:disabled), select:not(:disabled), label.file-button { cursor: pointe
 @media (max-width: 680px) {
   .machine-stage { width: min(100%, 440px); }
   .recovery-notice { flex-direction: column; align-items: stretch; }
+}
+
+/* ===== numbered balls, winner history ===== */
+.focus-ball.digits-3 .focus-ball-number { font-size: .66cqw; }
+.mini-ball { --ball-color: #f4c430; flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #ffffffa6 0, #fff0 34%), var(--ball-color); box-shadow: inset -2px -3px 6px #0006, 0 1px 4px #0006; }
+.mini-ball b { width: 62%; aspect-ratio: 1; display: grid; place-items: center; border-radius: 50%; color: #17141a; background: #fff; font: 800 10px/1 "DM Sans", system-ui, sans-serif; letter-spacing: -.02em; }
+.mini-ball.digits-3 b { font-size: 7.5px; }
+.mini-ball-sm { width: 24px; height: 24px; }
+.mini-ball-sm b { font-size: 8px; }
+.mini-ball-sm.digits-3 b { font-size: 6px; }
+.history-rank { flex: none; min-width: 22px; text-align: center; color: #c7a663; font: 600 13px "Playfair Display", Georgia, serif; }
+
+.public-winner-list { display: flex; flex-direction: column; align-content: flex-start; justify-content: flex-start; gap: 6px; padding-right: 4px; scroll-behavior: smooth; }
+.public-winner-list li { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid #2f2a33; border-radius: 9px; background: linear-gradient(135deg, #211d25, #1b1820); }
+.public-winner-list li:first-child { border-color: #5b4a2c; background: linear-gradient(135deg, #2a2418, #1d1a1b); }
+.public-winner-list li > div { flex: 1; min-width: 0; }
+.public-winner-list li strong { font-size: 12.5px; }
+.public-winner-list li small { color: #8f878b; font-size: 10px; }
+.public-participant-list li .mini-ball { margin-right: 2px; }
+
+.history-list { padding: 8px 0; border-top: 0; display: flex; flex-direction: column; gap: 7px; }
+.history-row { min-height: 54px; padding: 8px 12px; gap: 12px; border: 1px solid #302b33; border-radius: 10px; background: linear-gradient(135deg, #211d25, #1b1820); }
+.history-row:first-child { border-color: #5b4a2c; background: linear-gradient(135deg, #2a2418, #1d1a1b); }
+.history-person strong { font-size: 13.5px; }
+.history-person span { font-size: 10px; }
+@media (max-width: 680px) {
+  .public-winner-list li { padding: 6px 8px; gap: 8px; }
+  .public-winner-list li strong { font-size: 10.5px; }
+  .mini-ball { width: 26px; height: 26px; }
 }

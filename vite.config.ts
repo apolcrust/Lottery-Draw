@@ -18,8 +18,6 @@ function offlineCachePlugin(): Plugin {
       const assets = [
         ...entries.map((entry) => `${base}${entry.fileName}`),
         // Static files from /public that the draw needs even when the venue Wi-Fi drops.
-        `${base}assets/lottery-machine.gif`,
-        `${base}assets/lottery-machine-frames.webp`,
         `${base}logo-center.png`,
       ];
       const version = createHash("sha256")

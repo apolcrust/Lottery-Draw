@@ -1,35 +1,11 @@
 import { describe, expect, it } from "vitest";
-import {
-  clampDurationSeconds, FINAL_FRAME, FRAME_COUNT, MIX_FRAMES, nextMixFrame, REVEAL_FRAME_MS, REVEAL_FRAMES,
-  remainingMixMs, revealFrameAt,
-} from "./machineTimeline";
+import { clampDurationSeconds, FOCUS_MS, REVEAL_RISE_MS, REVEAL_TOTAL_MS, remainingMixMs } from "./machineTimeline";
+import { GUIDE_END } from "./machinePhysics";
 
-describe("GIF frame plan", () => {
-  it("splits the 9 GIF frames into idle, mixing and reveal ranges without overlap", () => {
-    const all = [0, ...MIX_FRAMES, ...REVEAL_FRAMES];
-    expect(all).toHaveLength(FRAME_COUNT);
-    expect(new Set(all).size).toBe(FRAME_COUNT);
-    expect(FINAL_FRAME).toBe(FRAME_COUNT - 1);
-  });
-
-  it("never repeats a mixing frame back to back and never leaves the mixing range", () => {
-    let frame = 1;
-    for (let i = 0; i < 400; i += 1) {
-      const next = nextMixFrame(frame, Math.random());
-      expect(next).not.toBe(frame);
-      expect(MIX_FRAMES).toContain(next);
-      frame = next;
-    }
-    expect(MIX_FRAMES).toContain(nextMixFrame(0, 0.99));
-    expect(MIX_FRAMES).toContain(nextMixFrame(4, 0));
-  });
-
-  it("plays the reveal frames in order and holds on the last one", () => {
-    expect(revealFrameAt(0)).toBe(5);
-    expect(revealFrameAt(REVEAL_FRAME_MS)).toBe(6);
-    expect(revealFrameAt(REVEAL_FRAME_MS * 3)).toBe(8);
-    expect(revealFrameAt(60_000)).toBe(8);
-    expect(revealFrameAt(-50)).toBe(5);
+describe("reveal timeline", () => {
+  it("lets the ball reach the top of the tube before the focus animation starts", () => {
+    expect(REVEAL_RISE_MS).toBeGreaterThan(GUIDE_END * 1000);
+    expect(REVEAL_TOTAL_MS).toBe(REVEAL_RISE_MS + FOCUS_MS);
   });
 });
 

@@ -973,12 +973,17 @@ function App() {
     setImportPending(true);
     try {
       if (supabase && eventId) {
-        adoptServerData(await importLotteryParticipants(supabase, eventId, {
-          names: entries.map((entry) => entry.name),
-          weights: weightColumn >= 0 && canEditEvent ? entries.map((entry) => entry.weight) : undefined,
-          action: importAction,
-          keepDuplicates: preserveDuplicates,
-        }));
+        // Large spreadsheets are sent in chunks of 2000 names so each database call stays fast.
+        const CHUNK = 2000;
+        for (let start = 0; start < entries.length; start += CHUNK) {
+          const chunk = entries.slice(start, start + CHUNK);
+          adoptServerData(await importLotteryParticipants(supabase, eventId, {
+            names: chunk.map((entry) => entry.name),
+            weights: weightColumn >= 0 && canEditEvent ? chunk.map((entry) => entry.weight) : undefined,
+            action: start === 0 ? importAction : "append",
+            keepDuplicates: preserveDuplicates,
+          }));
+        }
       } else {
         const incoming = entries.map((entry) => makeParticipant(entry.name, canEditEvent ? entry.weight : 1));
         if (importAction === "replace" && dataRef.current.overrideParticipantId) commitOverride(null, false);
@@ -1251,6 +1256,7 @@ function App() {
 
   const machine = <div className="machine-stage">
     <LotteryMachine phase={machinePhase} ballLabel={String(ballNumber).padStart(2, "0")} ballColor={ballColor}
+      colors={data.settings.colors}
       participantCount={data.participants.length} onRevealComplete={handleRevealComplete} />
     <div className={`draw-status${drawActive ? " is-active" : ""}`} role="status" aria-live="polite">{drawStatus}</div>
   </div>;

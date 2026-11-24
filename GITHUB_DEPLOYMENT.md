@@ -46,7 +46,7 @@ Audience URL: shown by **Audience link** in the console: `https://USERNAME.githu
 - [ ] `?view=operator` shows the sign-in; the email link signs you in on the deployed site.
 - [ ] Event creation works; the audience link opens in a second device.
 - [ ] Names added on one device appear on the other.
-- [ ] The machine GIF/frames load (Network tab: 200).
+- [ ] The lottery machine is drawn (cabinet, glass chamber, balls).
 - [ ] A draw mixes for the configured time, reveals, and shows the winner on both devices.
 - [ ] Winner history, search, export and restore work.
 - [ ] Predetermined winner + shortcut work and the name is not visible to the audience beforehand.

@@ -453,11 +453,10 @@ as $$
 declare
   v_event public.lottery_events%rowtype;
   v_data jsonb;
+  v_existing jsonb;
+  v_new jsonb;
   v_participants jsonb;
-  v_seen text[] := array[]::text[];
   v_weights numeric[];
-  v_item record;
-  v_name text;
 begin
   if p_action is null or p_action not in ('append', 'replace') then
     raise exception 'Choose whether to add to or replace the participant list.';
@@ -466,7 +465,7 @@ begin
     raise exception 'The duplicate-name setting is required.';
   end if;
   if p_names is null or pg_catalog.cardinality(p_names) = 0 or pg_catalog.cardinality(p_names) > 10000 then
-    raise exception 'Import between 1 and 10000 participant names.';
+    raise exception 'Import between 1 and 10000 participant names at a time.';
   end if;
   if exists (
     select 1
@@ -511,34 +510,41 @@ begin
   end if;
 
   if p_action = 'append' then
-    v_participants := v_data -> 'participants';
-    select coalesce(pg_catalog.array_agg(pg_catalog.lower(pg_catalog.btrim(p.value ->> 'name'))), array[]::text[])
-    into v_seen
-    from pg_catalog.jsonb_array_elements(v_participants) as p(value);
+    v_existing := v_data -> 'participants';
   else
-    v_participants := '[]'::jsonb;
+    v_existing := '[]'::jsonb;
   end if;
 
-  for v_item in
-    select pg_catalog.btrim(input.name) as name, input.weight as weight
-    from pg_catalog.unnest(p_names, v_weights) with ordinality as input(name, weight, ordinal)
-    order by input.ordinal
-  loop
-    v_name := v_item.name;
-    if p_keep_duplicates or not (pg_catalog.lower(v_name) = any(v_seen)) then
-      v_participants := v_participants || pg_catalog.jsonb_build_array(
-        pg_catalog.jsonb_build_object(
-          'id', pg_catalog.gen_random_uuid()::text,
-          'name', v_name,
-          'weight', v_item.weight
-        )
-      );
-      if not p_keep_duplicates then
-        v_seen := pg_catalog.array_append(v_seen, pg_catalog.lower(v_name));
-      end if;
-    end if;
-  end loop;
+  -- One set-based query (fast for thousands of names): number the input rows, drop repeats within the file
+  -- and names already on the list (unless duplicates are kept), then build the new participant objects.
+  with input as (
+    select s.i as ordinal, pg_catalog.btrim(p_names[s.i]) as person_name, v_weights[s.i] as person_weight
+    from pg_catalog.generate_series(1, pg_catalog.cardinality(p_names)) as s(i)
+  ), ranked as (
+    select input.ordinal, input.person_name, input.person_weight,
+           pg_catalog.lower(input.person_name) as name_key,
+           pg_catalog.row_number() over (partition by pg_catalog.lower(input.person_name) order by input.ordinal) as repeat_number
+    from input
+  ), existing as (
+    select pg_catalog.lower(pg_catalog.btrim(e.value ->> 'name')) as name_key
+    from pg_catalog.jsonb_array_elements(v_existing) as e(value)
+  )
+  select coalesce(
+    pg_catalog.jsonb_agg(
+      pg_catalog.jsonb_build_object(
+        'id', pg_catalog.gen_random_uuid()::text,
+        'name', r.person_name,
+        'weight', r.person_weight
+      ) order by r.ordinal
+    ),
+    '[]'::jsonb
+  )
+  into v_new
+  from ranked as r
+  where p_keep_duplicates
+    or (r.repeat_number = 1 and not exists (select 1 from existing as x where x.name_key = r.name_key));
 
+  v_participants := v_existing || v_new;
   if pg_catalog.jsonb_array_length(v_participants) > 20000 then
     raise exception 'A lottery event can hold at most 20000 participants.';
   end if;
@@ -571,8 +577,6 @@ declare
   v_event public.lottery_events%rowtype;
   v_data jsonb;
   v_participants jsonb;
-  v_seen text[] := array[]::text[];
-  v_item record;
   v_name text;
 begin
   if p_action is null or p_action not in ('add', 'remove', 'deduplicate', 'clear') then
@@ -640,23 +644,18 @@ begin
   elsif p_action = 'clear' then
     v_participants := '[]'::jsonb;
   else
-    v_participants := '[]'::jsonb;
-    for v_item in
-      select participant.value
-      from pg_catalog.jsonb_array_elements(v_data -> 'participants') with ordinality as participant(value, ordinality)
-      order by participant.ordinality
-    loop
-      v_name := pg_catalog.btrim(v_item.value ->> 'name');
-      if v_name is null or pg_catalog.char_length(v_name) = 0 then
-        raise exception 'The shared event contains an invalid participant name.';
-      end if;
-      if not (pg_catalog.lower(v_name) = any(v_seen)) then
-        v_seen := pg_catalog.array_append(v_seen, pg_catalog.lower(v_name));
-        v_participants := v_participants || pg_catalog.jsonb_build_array(
-          pg_catalog.jsonb_set(v_item.value, '{name}', pg_catalog.to_jsonb(v_name), true)
-        );
-      end if;
-    end loop;
+    -- deduplicate: keep the first entry of every name (case-insensitive), in the original order
+    select coalesce(
+      pg_catalog.jsonb_agg(pg_catalog.jsonb_set(t.value, '{name}', pg_catalog.to_jsonb(pg_catalog.btrim(t.value ->> 'name')), true) order by t.ordinality),
+      '[]'::jsonb
+    )
+    into v_participants
+    from (
+      select p.value, p.ordinality,
+             pg_catalog.row_number() over (partition by pg_catalog.lower(pg_catalog.btrim(p.value ->> 'name')) order by p.ordinality) as repeat_number
+      from pg_catalog.jsonb_array_elements(v_data -> 'participants') with ordinality as p(value, ordinality)
+    ) as t
+    where t.repeat_number = 1;
   end if;
 
   v_data := pg_catalog.jsonb_set(v_data, '{participants}', v_participants, true);

@@ -1,6 +1,6 @@
 # Lottery Ball System
 
-A live lottery-ball drawing system for raffles and events. A large lottery machine (your supplied GIF, played under state control) mixes the balls, a ball rises through the tube, and the winner is announced on every connected screen.
+A live lottery-ball drawing system for raffles and events. A large lottery machine (drawn live in code) mixes the balls, a ball rises through the tube, and the winner is announced on every connected screen.
 
 It is a separate application from Wheel of Fortune: its own Supabase project, `lottery_*` tables and functions, `VITE_LOTTERY_*` environment variables, and its own GitHub Pages deployment.
 
@@ -39,7 +39,7 @@ Other devices watching the event play the same mixing and reveal sequence and sh
 
 ## The animation
 
-`public/assets/lottery-machine.gif` is your original GIF (439 x 390, 9 frames, 450 ms each). A plain GIF can only loop its whole clip, so `scripts/extract-frames.py` also derives `lottery-machine-frames.webp`, a sprite strip of exactly the same 9 frames, which `LotteryMachine.tsx` plays as: idle = frame 0, mixing = frames 1 to 4 (looping, never repeating a frame back to back), reveal = frames 5 to 8 once at the original pace. If the sprite cannot load, the component falls back to the plain animated GIF. The aspect ratio is preserved at every screen size.
+The lottery machine is drawn live in code on an HTML canvas (no GIF or image is shown on the page): a black cabinet with a glass chamber, a frosted side panel, an air inlet, a transparent selection tube with a red light, and 60 numbered balls with real physics (gravity, bounces, collisions, an air jet). The balls rest in a pile while idle, are tossed around by the air for the whole mixing time, and at the reveal the air fades and one ball is guided into the tube, rises to the top, and is pulled into focus with its number. It scales to any screen size and stays sharp on high-density displays. See `src/components/LotteryMachine.tsx` (drawing) and `src/machinePhysics.ts` (physics, unit-tested).
 
 ## Security model (improved over the Wheel of Fortune schema)
 
@@ -59,10 +59,10 @@ Participants (add, remove, edit names and **weights**, clear, deduplicate, XLSX/
 ## Tests
 
 ```sh
-npm test      # winner selection, weights, GIF frame plan, service layer, validation, shortcut
+npm test      # winner selection, weights, machine physics, service layer, validation, shortcut
 npm run build # type-check + production build
 ```
 
 ## Files
 
-`supabase/schema.sql` database · `src/components/LotteryMachine.tsx` machine · `src/components/WinnerAnnouncement.tsx` · `src/services/lotteryService.ts` all database access · `src/machineTimeline.ts` frame plan · `src/engine.ts` selection (local mode) · `.github/workflows/deploy-pages.yml` deployment.
+`supabase/schema.sql` database · `src/components/LotteryMachine.tsx` machine · `src/components/WinnerAnnouncement.tsx` · `src/services/lotteryService.ts` all database access · `src/machinePhysics.ts` ball physics, `src/machineTimeline.ts` timing · `src/engine.ts` selection (local mode) · `.github/workflows/deploy-pages.yml` deployment.

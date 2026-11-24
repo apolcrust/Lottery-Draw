@@ -75,7 +75,7 @@ npm run dev
 6. In Settings, set *Allow anyone with the audience link to start a draw* off: the audience button becomes disabled for visitors.
 
 ## Step 10: Test the machine
-Check that the machine image loads (not a blank box), the balls move for the whole mixing time, the ball rises into the tube, then grows into focus with a number, and finally the winner card and confetti appear. Open the browser DevTools, Network tab, and confirm `lottery-machine-frames.webp` returns 200.
+Check that the machine appears (cabinet, glass chamber, balls), the balls tumble for the whole mixing time, one ball rises into the tube, then grows into focus with a number, and finally the winner card and confetti appear.
 To test the predetermined winner: pick a name under **Predetermined winner**, press **Activate one-time pick** (or your shortcut key, default **O**), draw on the audience window: the machine behaves normally and the history labels it *Operator pick*. In DevTools, Network, you will not find that name in any audience response before the reveal.
 
 Continue with `GITHUB_DEPLOYMENT.md` to publish.

@@ -65,6 +65,7 @@ order by e.updated_at desc limit 5;
 | Magic link opens the wrong site / "redirect not allowed" | Add the exact site to Authentication, URL Configuration, Redirect URLs (with `/**`). |
 | No email arrives | Default sender is rate-limited; check spam; configure SMTP. |
 | Live updates do not arrive, "Live updates could not connect" | Check query 3; check the project is not paused (free projects pause after inactivity). |
+| `function pg_catalog.unnest(text[], numeric[]) does not exist` when importing | You are running an older `schema.sql`. Re-run the latest one (the import is now a single fast query and handles thousands of names). |
 | `A draw is already in progress` | Another device is drawing. Stuck for over 2 minutes? It expires automatically, or use **Cancel draw in progress** in the operator console. |
 | `The draw is not ready to be revealed yet` | The app waits and retries itself; the server enforces the configured duration. |
 | `Only the event operator can ...` | The operator switched off audience drawing / roster editing in Settings. Sign in as the owner on the audience page or switch the option back on. |

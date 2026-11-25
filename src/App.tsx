@@ -186,7 +186,7 @@ function App() {
     } catch (error) {
       notify(errorText(error, "The music preference could not be saved."), "error");
     }
-    if (enabled && (machinePhase === "mixing" || machinePhase === "revealing")) startMusic(true);
+    if (enabled && (machinePhase === "mixing" || machinePhase === "revealing" || machinePhase === "revealed")) startMusic(true);
     else stopMusic();
   };
 
@@ -200,7 +200,6 @@ function App() {
 
   // ----- presenting a finished draw -----------------------------------------------------------------------
   const showWinner = useCallback((winner: Winner, settings: LotterySettings) => {
-    stopMusic();
     lastWinnerKeyRef.current = winnerKey(winner);
     setBallNumber(winner.ticketNumber);
     setMachinePhase("revealed");
@@ -1586,7 +1585,7 @@ function App() {
           </section>
         </aside>
       </section>
-      <footer className="public-footer">Lottery Ball System - 2026</footer>
+      <footer className="public-footer">LUCKY DRAW - 2026</footer>
       {winnerOverlay}
       {dialogs}
       {toastStack}

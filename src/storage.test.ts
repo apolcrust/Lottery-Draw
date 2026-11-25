@@ -70,9 +70,20 @@ describe("winner ticket numbers", () => {
   });
 });
 
+describe("excluded participants", () => {
+  const people = [{ id: "a", name: "Ada", weight: 1 }, { id: "b", name: "Ben", weight: 1 }];
+  it("keeps valid excluded ids and drops unknown or duplicate ones", () => {
+    const result = validateData({ ...structuredClone(DEFAULT_DATA), participants: people, excludedParticipantIds: ["b", "ghost", "b"] });
+    expect(result.excludedParticipantIds).toEqual(["b"]);
+  });
+  it("defaults to nobody excluded", () => {
+    expect(validateData(structuredClone(DEFAULT_DATA)).excludedParticipantIds).toEqual([]);
+  });
+});
+
 describe("publicEventData", () => {
   it("removes the operator-only predetermined winner", () => {
-    const data = { ...structuredClone(DEFAULT_DATA), overrideParticipantId: "x", overrideActivated: true };
+    const data = { ...structuredClone(DEFAULT_DATA), overrideParticipantId: "x", overrideActivated: true, excludedParticipantIds: ["y"] };
     expect(Object.keys(publicEventData(data)).sort()).toEqual(["participants", "settings", "winners"]);
   });
 });

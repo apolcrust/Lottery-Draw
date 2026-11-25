@@ -44,6 +44,11 @@ export interface AppData {
    */
   overrideParticipantId: string | null;
   overrideActivated: boolean;
+  /**
+   * Operator-only. Participants listed here cannot win the RANDOM draw until the operator removes them from the list
+   * (an armed one-time pick can still choose them). Stored privately in Supabase, like the one-time pick.
+   */
+  excludedParticipantIds: string[];
 }
 
 export const MIN_DURATION_SECONDS = 3;
@@ -67,6 +72,7 @@ export const DEFAULT_DATA: AppData = {
   settings: DEFAULT_SETTINGS,
   overrideParticipantId: null,
   overrideActivated: false,
+  excludedParticipantIds: [],
 };
 
 /** What the browser knows about an in-flight draw. Deliberately contains NO winner information. */

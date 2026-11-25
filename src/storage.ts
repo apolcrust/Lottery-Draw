@@ -127,16 +127,20 @@ export function validateData(value: unknown, source: DataSource = "backup file")
   if (typeof overrideId === "string" && !ids.has(overrideId)) {
     throw new Error(`${sourceLabel} has a one-time pick that is not an active participant.`);
   }
+  const rawExcluded = (candidate as { excludedParticipantIds?: unknown }).excludedParticipantIds;
+  const excludedParticipantIds = Array.isArray(rawExcluded)
+    ? [...new Set(rawExcluded.filter((id): id is string => typeof id === "string" && ids.has(id)))] : [];
   return {
     participants: candidate.participants,
     winners: winners as AppData["winners"],
     settings,
+    excludedParticipantIds,
     overrideParticipantId: typeof overrideId === "string" ? overrideId : null,
     overrideActivated: candidate.overrideActivated === true && typeof overrideId === "string" && ids.has(overrideId),
   };
 }
 
 /** The shape stored in the shared, publicly readable lottery_events.data column: no operator secrets. */
-export function publicEventData(data: AppData): Omit<AppData, "overrideParticipantId" | "overrideActivated"> {
+export function publicEventData(data: AppData): Omit<AppData, "overrideParticipantId" | "overrideActivated" | "excludedParticipantIds"> {
   return { participants: data.participants, winners: data.winners, settings: data.settings };
 }

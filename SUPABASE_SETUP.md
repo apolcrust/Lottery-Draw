@@ -75,7 +75,9 @@ npm run dev
 6. In Settings, set *Allow anyone with the audience link to start a draw* off: the audience button becomes disabled for visitors.
 
 ## Step 10: Test the machine
-Check that the machine appears (cabinet, glass chamber, balls), the balls tumble for the whole mixing time, one ball rises into the tube, then grows into focus with a number, and finally the winner card and confetti appear.
+Check that the machine appears (a glass globe on a dark pedestal with balls), the balls tumble in 3D for the whole mixing time, one ball rises into the glass chimney on top, then grows into focus with a number, and finally the winner card and confetti appear.
 To test the predetermined winner: pick a name under **Predetermined winner**, press **Activate one-time pick** (or your shortcut key, default **O**), draw on the audience window: the machine behaves normally and the operator console records it as an operator pick (audience screens never show how a winner was chosen). In DevTools, Network, you will not find that name in any audience response before the reveal.
 
 Continue with `GITHUB_DEPLOYMENT.md` to publish.
+
+To test the excluded list: in the operator console open the card **Excluded from random draw**, click a few names (they turn red and appear as chips), then draw several times on the audience window. Those names never win the random draw. Remove a name from the chips and it can win again. The audience screen never shows this list.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  consumeOverride, pickRandomIndex, pickWeightedIndex, removeParticipantById, secureRandomInt, selectionModeFor,
+  pruneExcluded, consumeOverride, pickRandomIndex, pickWeightedIndex, removeParticipantById, secureRandomInt, selectionModeFor,
   selectWinner, weightedIndexForRoll,
 } from "./engine";
 import type { Participant } from "./types";
@@ -73,5 +73,34 @@ describe("selection mode and predetermined winner", () => {
     expect(removeParticipantById(participants, "a").map((p) => p.id)).toEqual(["b"]);
     expect(consumeOverride("a", "a")).toBeNull();
     expect(consumeOverride("a", "b")).toBe("a");
+  });
+});
+
+describe("participants excluded from the random draw", () => {
+  const people: Participant[] = ["a", "b", "c", "d"].map((id) => ({ id, name: id, weight: 1 }));
+
+  it("never picks an excluded participant at random, over many draws", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 3000; i += 1) seen.add(people[selectWinner(people, null, false, ["a", "c"]).index].id);
+    expect([...seen].sort()).toEqual(["b", "d"]);
+  });
+
+  it("returns the index in the full list and keeps the weights of the eligible people", () => {
+    const weighted: Participant[] = [{ id: "a", name: "a", weight: 1 }, { id: "b", name: "b", weight: 1 }, { id: "c", name: "c", weight: 9 }];
+    expect(selectWinner(weighted, null, false, ["c"]).mode).toBe("random");
+    expect(selectWinner(weighted, null, false, ["a"]).mode).toBe("weighted");
+    expect(selectWinner(weighted, null, false, ["a", "b"]).index).toBe(2);
+  });
+
+  it("refuses to draw when everyone is excluded, with a clear message", () => {
+    expect(() => selectWinner(people, null, false, ["a", "b", "c", "d"])).toThrow("excluded from the random draw");
+  });
+
+  it("still lets an armed one-time pick choose an excluded participant", () => {
+    expect(selectWinner(people, "a", true, ["a"])).toEqual({ index: 0, mode: "controlled" });
+  });
+
+  it("prunes ids that are no longer on the roster, without duplicates", () => {
+    expect(pruneExcluded(["a", "ghost", "a", "b"], people)).toEqual(["a", "b"]);
   });
 });

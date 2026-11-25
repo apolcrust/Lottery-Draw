@@ -115,14 +115,28 @@ export async function saveLotteryEventData(client: SupabaseClient, eventId: stri
   if (!row) throw new Error("This account is not allowed to update this lottery event.");
 }
 
-export async function fetchOverride(client: SupabaseClient, eventId: string): Promise<{ overrideParticipantId: string | null; overrideActivated: boolean }> {
+export interface OperatorSecrets {
+  overrideParticipantId: string | null;
+  overrideActivated: boolean;
+  excludedParticipantIds: string[];
+}
+
+/** The operator-only settings of an event: the one-time pick and the participants excluded from the random draw. */
+export async function fetchOverride(client: SupabaseClient, eventId: string): Promise<OperatorSecrets> {
   const { data, error } = await client.from(SECRETS_TABLE)
-    .select("override_participant_id, override_armed")
+    .select("override_participant_id, override_armed, excluded_participant_ids")
     .eq("event_id", eventId)
     .maybeSingle();
   if (error) throw error;
   const id = data && typeof data.override_participant_id === "string" ? data.override_participant_id : null;
-  return { overrideParticipantId: id, overrideActivated: !!data && data.override_armed === true && id !== null };
+  const excluded = data && Array.isArray(data.excluded_participant_ids)
+    ? (data.excluded_participant_ids as unknown[]).filter((value): value is string => typeof value === "string") : [];
+  return { overrideParticipantId: id, overrideActivated: !!data && data.override_armed === true && id !== null, excludedParticipantIds: excluded };
+}
+
+export async function setExcluded(client: SupabaseClient, eventId: string, participantIds: string[]): Promise<void> {
+  const { error } = await client.rpc("set_lottery_excluded", { p_event_id: eventId, p_participant_ids: participantIds });
+  if (error) throw error;
 }
 
 export async function setOverride(client: SupabaseClient, eventId: string, participantId: string | null, armed: boolean): Promise<void> {

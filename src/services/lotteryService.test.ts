@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  beginLotteryDraw, clearPendingDraw, finishLotteryDraw, isNetworkError, loadPendingDraw, parseDrawTicket,
+  beginLotteryDraw, clearPendingDraw, fetchOverride, setExcluded, finishLotteryDraw, isNetworkError, loadPendingDraw, parseDrawTicket,
   parseEventRow, retryDelayFromError, saveLotteryEventData, savePendingDraw, setOverride,
 } from "./lotteryService";
 import { DEFAULT_DATA, type AppData } from "../types";
@@ -109,6 +109,22 @@ describe("event persistence", () => {
       draw_started_at: "2026-11-23T10:00:00Z", draw_duration_ms: 8000 });
     expect(row).toMatchObject({ id: "e", ownerId: "o", isDrawing: true, drawDurationMs: 8000 });
     expect(() => parseEventRow({ id: "e" })).toThrow();
+  });
+});
+
+describe("excluded participants (operator only)", () => {
+  it("saves the excluded list through the owner-only function", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: {}, error: null });
+    await setExcluded(fakeClient(rpc), "evt", ["p1", "p2"]);
+    expect(rpc).toHaveBeenCalledWith("set_lottery_excluded", { p_event_id: "evt", p_participant_ids: ["p1", "p2"] });
+  });
+
+  it("reads the private operator settings together", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: { override_participant_id: "p1", override_armed: true, excluded_participant_ids: ["p2", 7, "p3"] }, error: null });
+    const from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }));
+    const result = await fetchOverride(fakeClient(vi.fn(), from), "evt");
+    expect(result).toEqual({ overrideParticipantId: "p1", overrideActivated: true, excludedParticipantIds: ["p2", "p3"] });
+    expect(from).toHaveBeenCalledWith("lottery_event_secrets");
   });
 });
 

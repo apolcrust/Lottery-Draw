@@ -1,28 +1,31 @@
-// Physics for the lottery machine drawn on the canvas. Pure TypeScript (no DOM) so it can be unit-tested.
-// Coordinates are "logical" pixels in a 440 x 392 drawing space; the canvas scales them to any screen size.
+// 3D physics for the lottery globe. Pure TypeScript (no DOM) so it can be unit-tested.
+// World units: the glass globe is a sphere of radius 1 centred on the origin, y points up.
 
-export const LOGICAL_WIDTH = 440;
-export const LOGICAL_HEIGHT = 392;
+export const GLOBE_RADIUS = 1;
+/** Height of the floor (the champagne collar) the balls rest on. */
+export const FLOOR_Y = -0.58;
 
-export const CHAMBER = { left: 106, right: 290, floor: 244, ceiling: 66 } as const;
-export const TUBE = { x0: 216, x1: 238, y0: 58, y1: 170 } as const;
-export const TUBE_CENTER_X = (TUBE.x0 + TUBE.x1) / 2;
-/** Where the selected ball waits just under the tube mouth, and where it comes to rest at the top. */
-export const TUBE_MOUTH_Y = 178;
-export const TUBE_TOP_BALL_Y = 88;
+export const BALL_RADIUS = 0.115;
+export const BALL_COUNT = 64;
 
-export const BALL_RADIUS = 7;
-export const BALL_COUNT = 60;
+/** The transparent chimney on top of the globe that the winning ball rises into. */
+export const TUBE_RADIUS = 0.13;
+export const TUBE_BOTTOM_Y = 0.98;
+export const TUBE_TOP_Y = 1.62;
+/** Where the selected ball waits just under the chimney, and where it comes to rest at the top. */
+export const MOUTH_Y = 0.72;
+export const TUBE_TOP_BALL_Y = 1.4;
 
-const GRAVITY = 900;
+const GRAVITY = 9.8;
 const STEP = 1 / 120;
-/** Seconds into the reveal when the chosen ball starts being guided into the tube. */
+/** Seconds into the reveal when the chosen ball starts being guided into the chimney. */
 export const GUIDE_START = 0.8;
-/** Seconds into the reveal by which the chosen ball is guaranteed to be at the top of the tube. */
+/** Seconds into the reveal by which the chosen ball is guaranteed to be at the top of the chimney. */
 export const GUIDE_END = 3.0;
 
 export interface Ball {
-  x: number; y: number; vx: number; vy: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
   r: number;
   /** Per-ball lift multiplier so the balls do not all behave identically. */
   k: number;
@@ -55,6 +58,12 @@ export function createRng(seed: number): () => number {
   };
 }
 
+/** The colour of the ball for a given participant number (their position on the list). */
+export function paletteColor(colors: readonly string[], number: number): string {
+  const palette = colors.length ? colors : ["#f4c430"];
+  return palette[(Math.max(1, number) - 1) % palette.length];
+}
+
 /** Numbers printed on the machine's balls: random participant numbers from 1..total (unique when possible). */
 export function sampleLabels(total: number, count: number, rng: () => number = Math.random): number[] {
   const size = Math.max(1, Math.floor(total));
@@ -65,17 +74,20 @@ export function sampleLabels(total: number, count: number, rng: () => number = M
 }
 
 export function createSim(colors: readonly string[], rng: () => number = Math.random, count = BALL_COUNT, labels?: readonly number[]): Sim {
-  const palette = colors.length ? colors : ["#f4c430"];
   const balls: Ball[] = [];
   for (let i = 0; i < count; i += 1) {
     const number = labels?.[i] ?? i + 1;
+    let x = 0; let y = 0; let z = 0;
+    do {
+      x = (rng() - 0.5) * 1.5;
+      z = (rng() - 0.5) * 1.5;
+      y = FLOOR_Y + BALL_RADIUS + rng() * 1.1;
+    } while (Math.hypot(x, y, z) > GLOBE_RADIUS - BALL_RADIUS);
     balls.push({
-      x: CHAMBER.left + BALL_RADIUS + rng() * (CHAMBER.right - CHAMBER.left - 2 * BALL_RADIUS),
-      y: CHAMBER.floor - 150 + rng() * 140,
-      vx: 0, vy: 0, r: BALL_RADIUS,
+      x, y, z, vx: 0, vy: 0, vz: 0, r: BALL_RADIUS,
       k: 0.82 + rng() * 0.36,
       seed: rng() * Math.PI * 2,
-      color: palette[(number - 1) % palette.length],
+      color: paletteColor(colors, number),
       label: String(number).padStart(2, "0"),
       guided: false, atMouth: false,
     });
@@ -87,31 +99,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function collideWithTube(ball: Ball) {
-  const nearestX = clamp(ball.x, TUBE.x0, TUBE.x1);
-  const nearestY = clamp(ball.y, TUBE.y0, TUBE.y1);
-  const dx = ball.x - nearestX;
-  const dy = ball.y - nearestY;
-  const distanceSquared = dx * dx + dy * dy;
-  if (distanceSquared >= ball.r * ball.r) return;
-  if (distanceSquared === 0) {
-    // Centre is inside the tube footprint: push the ball out through the open bottom.
-    ball.y = TUBE.y1 + ball.r;
-    ball.vy = Math.max(ball.vy, 0);
-    return;
-  }
-  const distance = Math.sqrt(distanceSquared);
-  const nx = dx / distance;
-  const ny = dy / distance;
-  ball.x += nx * (ball.r - distance);
-  ball.y += ny * (ball.r - distance);
-  const vn = ball.vx * nx + ball.vy * ny;
-  if (vn < 0) {
-    ball.vx -= 1.5 * vn * nx;
-    ball.vy -= 1.5 * vn * ny;
-  }
-}
-
 function collidePairs(balls: Ball[]) {
   for (let i = 0; i < balls.length; i += 1) {
     const a = balls[i];
@@ -119,28 +106,31 @@ function collidePairs(balls: Ball[]) {
       const b = balls[j];
       if (a.guided && b.guided) continue;
       const dx = b.x - a.x;
-      const dy = b.y - a.y;
       const min = a.r + b.r;
-      if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
-      const d2 = dx * dx + dy * dy;
+      if (Math.abs(dx) > min) continue;
+      const dy = b.y - a.y;
+      if (Math.abs(dy) > min) continue;
+      const dz = b.z - a.z;
+      if (Math.abs(dz) > min) continue;
+      const d2 = dx * dx + dy * dy + dz * dz;
       if (d2 >= min * min) continue;
       const d = Math.sqrt(d2) || 0.0001;
-      const nx = dx / d;
-      const ny = dy / d;
+      const nx = dx / d; const ny = dy / d; const nz = dz / d;
       const overlap = min - d;
       if (a.guided) {
         // The selected ball is moved by the guide; the others are pushed out of its way.
-        b.x += nx * overlap; b.y += ny * overlap;
+        b.x += nx * overlap; b.y += ny * overlap; b.z += nz * overlap;
       } else if (b.guided) {
-        a.x -= nx * overlap; a.y -= ny * overlap;
+        a.x -= nx * overlap; a.y -= ny * overlap; a.z -= nz * overlap;
       } else {
-        a.x -= nx * overlap * 0.5; a.y -= ny * overlap * 0.5;
-        b.x += nx * overlap * 0.5; b.y += ny * overlap * 0.5;
-        const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+        const half = overlap * 0.5;
+        a.x -= nx * half; a.y -= ny * half; a.z -= nz * half;
+        b.x += nx * half; b.y += ny * half; b.z += nz * half;
+        const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny + (b.vz - a.vz) * nz;
         if (vn < 0) {
           const impulse = -(1 + 0.55) * vn / 2;
-          a.vx -= impulse * nx; a.vy -= impulse * ny;
-          b.vx += impulse * nx; b.vy += impulse * ny;
+          a.vx -= impulse * nx; a.vy -= impulse * ny; a.vz -= impulse * nz;
+          b.vx += impulse * nx; b.vy += impulse * ny; b.vz += impulse * nz;
         }
       }
     }
@@ -151,80 +141,104 @@ function collidePairs(balls: Ball[]) {
 export function stepSim(sim: Sim, settling = false) {
   const dt = STEP;
   sim.t += dt;
-  // ease the air strength toward its target
   const rate = sim.airTarget > sim.air ? 3 : 2.5;
   sim.air += clamp(sim.airTarget - sim.air, -rate * dt, rate * dt);
-  const drag = Math.exp(-(settling ? 3 : 0.7) * dt);
+  const drag = Math.exp(-(settling ? 3 : 0.6) * dt);
 
   for (const ball of sim.balls) {
     if (ball.guided) continue;
-    let ax = 0;
-    let ay = GRAVITY;
+    let ax = 0; let ay = -GRAVITY; let az = 0;
     if (sim.air > 0.001) {
-      const height = Math.max(0, CHAMBER.floor - ball.y);
-      ay -= sim.air * 2300 * ball.k * (0.72 + 0.5 * Math.sin(sim.t * 1.9 + ball.seed * 2)) * Math.exp(-height / 135);
-      ax = sim.air * (420 * Math.sin(sim.t * 3.1 + ball.y * 0.045 + ball.seed) + (sim.rng() - 0.5) * 900);
+      const height = Math.max(0, ball.y - FLOOR_Y);
+      const rho = Math.hypot(ball.x, ball.z);
+      // an air jet from the hub in the middle of the floor: a fountain that rises in the centre and falls at the sides
+      const column = 0.55 + 0.45 * Math.exp(-((rho / 0.7) ** 2));
+      const pulse = 0.72 + 0.5 * Math.sin(sim.t * 1.9 + ball.seed * 2);
+      ay += sim.air * 31 * ball.k * pulse * column * Math.exp(-height / 1.6);
+      // swirl around the vertical axis plus turbulence
+      const swirl = sim.air * 1.6;
+      // a gentle pull toward the axis keeps the balls circulating through the jet instead of hugging the glass
+      const pull = sim.air * 5;
+      ax += -ball.z * swirl - ball.x * pull + sim.air * (sim.rng() - 0.5) * 9;
+      az += ball.x * swirl - ball.z * pull + sim.air * (sim.rng() - 0.5) * 9;
+      ax += sim.air * 3.2 * Math.sin(sim.t * 3.1 + ball.seed);
+      az += sim.air * 3.2 * Math.cos(sim.t * 2.7 + ball.seed * 1.3);
     }
     ball.vx = (ball.vx + ax * dt) * drag;
     ball.vy = (ball.vy + ay * dt) * drag;
-    const speed = Math.hypot(ball.vx, ball.vy);
-    if (speed > 520) { ball.vx *= 520 / speed; ball.vy *= 520 / speed; }
+    ball.vz = (ball.vz + az * dt) * drag;
+    const speed = Math.hypot(ball.vx, ball.vy, ball.vz);
+    if (speed > 6) { const f = 6 / speed; ball.vx *= f; ball.vy *= f; ball.vz *= f; }
     ball.x += ball.vx * dt;
     ball.y += ball.vy * dt;
+    ball.z += ball.vz * dt;
   }
 
   // chosen ball guidance (reveal)
   if (sim.chosen && sim.revealT >= 0) {
     sim.revealT += dt;
     const ball = sim.chosen;
-    if (sim.revealT >= GUIDE_START && !ball.guided) { ball.guided = true; ball.vx = 0; ball.vy = 0; }
+    if (sim.revealT >= GUIDE_START && !ball.guided) { ball.guided = true; ball.vx = 0; ball.vy = 0; ball.vz = 0; }
     if (ball.guided) {
       if (sim.revealT >= GUIDE_END) {
-        ball.x = TUBE_CENTER_X; ball.y = TUBE_TOP_BALL_Y; ball.atMouth = true;
+        ball.x = 0; ball.z = 0; ball.y = TUBE_TOP_BALL_Y; ball.atMouth = true;
       } else if (!ball.atMouth) {
-        const dx = TUBE_CENTER_X - ball.x;
-        const dy = TUBE_MOUTH_Y - ball.y;
-        const distance = Math.hypot(dx, dy);
-        if (distance < 2) {
+        const dx = -ball.x; const dy = MOUTH_Y - ball.y; const dz = -ball.z;
+        const distance = Math.hypot(dx, dy, dz);
+        if (distance < 0.02) {
           ball.atMouth = true;
         } else {
-          const speed = Math.min(240, distance * 5 + 30) * dt;
-          ball.x += (dx / distance) * Math.min(speed, distance);
-          ball.y += (dy / distance) * Math.min(speed, distance);
+          const move = Math.min(distance, Math.min(3.4, distance * 5 + 0.6) * dt);
+          ball.x += (dx / distance) * move; ball.y += (dy / distance) * move; ball.z += (dz / distance) * move;
         }
       } else {
-        ball.x = TUBE_CENTER_X;
-        ball.y = Math.max(TUBE_TOP_BALL_Y, ball.y - 95 * dt);
+        ball.x = 0; ball.z = 0;
+        ball.y = Math.min(TUBE_TOP_BALL_Y, ball.y + 0.85 * dt);
       }
     }
   }
 
-  for (const ball of sim.balls) {
+  constrain(sim.balls);
+  collidePairs(sim.balls);
+  collidePairs(sim.balls);
+  constrain(sim.balls);
+}
+
+/** The globe's glass wall and the floor. */
+function constrain(balls: Ball[]) {
+  for (const ball of balls) {
     if (ball.guided) continue;
-    const { left, right, floor, ceiling } = CHAMBER;
-    if (ball.x < left + ball.r) { ball.x = left + ball.r; ball.vx = Math.abs(ball.vx) * 0.65; }
-    if (ball.x > right - ball.r) { ball.x = right - ball.r; ball.vx = -Math.abs(ball.vx) * 0.65; }
-    if (ball.y > floor - ball.r) { ball.y = floor - ball.r; ball.vy = -Math.abs(ball.vy) * 0.45; ball.vx *= 0.97; }
-    if (ball.y < ceiling + ball.r) { ball.y = ceiling + ball.r; ball.vy = Math.abs(ball.vy) * 0.5; }
-    collideWithTube(ball);
+    const dist = Math.hypot(ball.x, ball.y, ball.z);
+    const maxDist = GLOBE_RADIUS - ball.r;
+    if (dist > maxDist) {
+      const nx = ball.x / dist; const ny = ball.y / dist; const nz = ball.z / dist;
+      ball.x = nx * maxDist; ball.y = ny * maxDist; ball.z = nz * maxDist;
+      const vn = ball.vx * nx + ball.vy * ny + ball.vz * nz;
+      if (vn > 0) {
+        ball.vx -= 1.6 * vn * nx; ball.vy -= 1.6 * vn * ny; ball.vz -= 1.6 * vn * nz;
+      }
+    }
+    if (ball.y < FLOOR_Y + ball.r) {
+      ball.y = FLOOR_Y + ball.r;
+      ball.vy = Math.abs(ball.vy) * 0.45;
+      ball.vx *= 0.97; ball.vz *= 0.97;
+    }
   }
-  collidePairs(sim.balls);
-  collidePairs(sim.balls);
 }
 
 /** Lets the balls fall into a resting pile instantly (used for the idle picture). */
-export function settleSim(sim: Sim, steps = 700) {
+export function settleSim(sim: Sim, steps = 800) {
   sim.air = 0; sim.airTarget = 0;
   for (let i = 0; i < steps; i += 1) stepSim(sim, true);
-  for (const ball of sim.balls) { ball.vx = 0; ball.vy = 0; }
+  for (const ball of sim.balls) { ball.vx = 0; ball.vy = 0; ball.vz = 0; }
 }
 
-/** Picks the ball closest to the tube mouth and starts the reveal; it will be labelled and coloured by the caller. */
+/** Picks the ball closest to the chimney mouth and starts the reveal; it will be labelled and coloured by the caller. */
 export function beginReveal(sim: Sim): Ball {
   let best = sim.balls[0];
   let bestDistance = Infinity;
   for (const ball of sim.balls) {
-    const distance = Math.hypot(ball.x - TUBE_CENTER_X, ball.y - TUBE_MOUTH_Y);
+    const distance = Math.hypot(ball.x, ball.y - MOUTH_Y, ball.z);
     if (distance < bestDistance) { best = ball; bestDistance = distance; }
   }
   sim.chosen = best;

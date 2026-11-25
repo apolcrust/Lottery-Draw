@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { FOCUS_MS, REVEAL_RISE_MS, type MachinePhase } from "../machineTimeline";
 import {
-  beginReveal, BALL_COUNT, BALL_RADIUS, CHAMBER, createSim, LOGICAL_HEIGHT, LOGICAL_WIDTH, sampleLabels, settleSim, stepSim, TUBE, TUBE_CENTER_X,
-  type Ball, type Sim,
+  CAMERA, LOGICAL_HEIGHT, LOGICAL_WIDTH, PITCH_SIN, globeCircle, project, ringEllipse,
+} from "../machineCamera";
+import {
+  BALL_COUNT, FLOOR_Y, GLOBE_RADIUS, TUBE_BOTTOM_Y, TUBE_RADIUS, TUBE_TOP_BALL_Y, TUBE_TOP_Y,
+  beginReveal, createSim, sampleLabels, settleSim, stepSim, type Ball, type Sim,
 } from "../machinePhysics";
 
 interface LotteryMachineProps {
@@ -12,121 +15,252 @@ interface LotteryMachineProps {
   ballColor: string;
   /** Colours of the balls in the machine. */
   colors: string[];
-  /** Called once when the "ball rises through the tube and is pulled into focus" sequence has finished. */
+  /** Called once when the "ball rises through the chimney and is pulled into focus" sequence has finished. */
   onRevealComplete: () => void;
   participantCount: number;
 }
 
-// ----- drawing helpers --------------------------------------------------------------------------------------
+// Where the winning ball sits at the top of the chimney, as a share of the machine's size.
+// The "pulled into focus" overlay starts exactly there.
+const TOP = project(0, TUBE_TOP_BALL_Y, 0);
+const FOCUS_X = (TOP.x / LOGICAL_WIDTH) * 100;
+const FOCUS_Y = (TOP.y / LOGICAL_HEIGHT) * 100;
+const FOCUS_START_SIZE = ((2 * 0.115 * TOP.scale) / LOGICAL_WIDTH) * 100;
+const FOCUS_SCALE = 36 / FOCUS_START_SIZE;
 
-function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+// ----- static artwork ---------------------------------------------------------------------------------------
+
+type Ctx = CanvasRenderingContext2D;
+
+const GOLD_LIGHT = "#f3dfae";
+const GOLD = "#cfa95d";
+const GOLD_DARK = "#7a5d2a";
+
+/** A vertical cylinder (pedestal parts): side body with cylindrical shading and a top face. */
+function cylinder(ctx: Ctx, yTop: number, yBottom: number, radius: number, stops: [number, string][], topFill: string | CanvasGradient) {
+  const top = ringEllipse(yTop, radius);
+  const bottom = ringEllipse(yBottom, radius);
+  const gradient = ctx.createLinearGradient(top.cx - top.rx, 0, top.cx + top.rx, 0);
+  for (const [position, color] of stops) gradient.addColorStop(position, color);
+  ctx.fillStyle = gradient;
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
+  ctx.moveTo(top.cx - top.rx, top.cy);
+  ctx.lineTo(bottom.cx - bottom.rx, bottom.cy);
+  ctx.ellipse(bottom.cx, bottom.cy, bottom.rx, bottom.ry, 0, Math.PI, 0, true);
+  ctx.lineTo(top.cx + top.rx, top.cy);
   ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = topFill;
+  ctx.beginPath();
+  ctx.ellipse(top.cx, top.cy, top.rx, top.ry, 0, 0, Math.PI * 2);
+  ctx.fill();
 }
 
-/** Cabinet, lid, chamber back wall, floor and the back half of the selection tube. */
-function drawBackLayer(ctx: CanvasRenderingContext2D) {
-  // base cabinet
-  let gradient = ctx.createLinearGradient(0, 250, 0, LOGICAL_HEIGHT);
-  gradient.addColorStop(0, "#131318");
-  gradient.addColorStop(1, "#040405");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(86, 250, 272, LOGICAL_HEIGHT - 250);
-  ctx.fillStyle = "#2c2c34";
-  ctx.fillRect(86, 250, 272, 2);
-  ctx.fillStyle = "#0a0a0d";
-  ctx.fillRect(86, 252, 6, LOGICAL_HEIGHT - 252);
-  // small handle slot on the front of the cabinet
-  ctx.fillStyle = "#757982";
-  roundedRect(ctx, 95, 290, 16, 13, 3); ctx.fill();
-  ctx.fillStyle = "#16161b";
-  roundedRect(ctx, 98, 293, 10, 7, 2); ctx.fill();
-
-  // lid: top surface and front face
-  ctx.fillStyle = "#23232a";
-  ctx.beginPath(); ctx.moveTo(92, 9); ctx.lineTo(362, 9); ctx.lineTo(362, 20); ctx.lineTo(76, 20); ctx.closePath(); ctx.fill();
-  gradient = ctx.createLinearGradient(0, 20, 0, 60);
-  gradient.addColorStop(0, "#1b1b21");
-  gradient.addColorStop(1, "#08080a");
-  ctx.fillStyle = gradient;
-  roundedRect(ctx, 76, 20, 286, 40, 4); ctx.fill();
-  ctx.fillStyle = "#34343d";
-  ctx.fillRect(78, 20, 282, 1.5);
-  // blue knobs on top
-  for (const knobX of [196, 232]) {
-    ctx.fillStyle = "#1d4fa8";
-    ctx.beginPath(); ctx.arc(knobX, 8, 5.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#4f8df0";
-    ctx.beginPath(); ctx.arc(knobX - 1.5, 6.5, 2.2, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // chamber back wall (dark glass interior)
-  gradient = ctx.createLinearGradient(0, 60, 0, 252);
-  gradient.addColorStop(0, "rgba(46, 58, 80, 0.62)");
-  gradient.addColorStop(0.55, "rgba(22, 27, 38, 0.82)");
-  gradient.addColorStop(1, "rgba(10, 12, 17, 0.95)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(98, 60, 200, 192);
-  // floor of the chamber
-  ctx.fillStyle = "rgba(150, 162, 180, 0.30)";
-  ctx.fillRect(98, CHAMBER.floor, 200, 8);
-  ctx.fillStyle = "rgba(220, 230, 245, 0.45)";
-  ctx.fillRect(98, CHAMBER.floor, 200, 1.2);
-  // air inlet box on the left of the tube
-  ctx.fillStyle = "rgba(180, 196, 218, 0.09)";
-  ctx.fillRect(142, 84, 16, 66);
-  ctx.strokeStyle = "rgba(200, 212, 230, 0.34)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(142.5, 84.5, 15, 65);
-  // back half of the selection tube
-  ctx.fillStyle = "rgba(214, 228, 248, 0.10)";
-  ctx.fillRect(TUBE.x0, TUBE.y0, TUBE.x1 - TUBE.x0, TUBE.y1 - TUBE.y0);
-}
-
-/** Glass reflections, rail, the side panel and the front edges of the tube; drawn over the balls. */
-function drawFrontLayer(ctx: CanvasRenderingContext2D) {
-  // diagonal glare on the front glass
-  ctx.fillStyle = "rgba(255, 255, 255, 0.055)";
-  ctx.beginPath(); ctx.moveTo(112, 62); ctx.lineTo(176, 62); ctx.lineTo(134, 246); ctx.lineTo(104, 246); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = "rgba(255, 255, 255, 0.03)";
-  ctx.beginPath(); ctx.moveTo(240, 62); ctx.lineTo(262, 62); ctx.lineTo(236, 246); ctx.lineTo(222, 246); ctx.closePath(); ctx.fill();
-  // horizontal rail
-  ctx.fillStyle = "rgba(205, 218, 238, 0.30)";
-  ctx.fillRect(98, 186, 200, 3);
-  ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
-  ctx.fillRect(98, 186, 200, 0.9);
-  // left glass edge
-  ctx.fillStyle = "rgba(190, 206, 228, 0.35)";
-  ctx.fillRect(97, 60, 2, 192);
-  // frosted side panel on the right
-  const gradient = ctx.createLinearGradient(298, 0, 358, 0);
-  gradient.addColorStop(0, "rgba(222, 226, 234, 0.58)");
-  gradient.addColorStop(1, "rgba(150, 157, 170, 0.50)");
-  ctx.fillStyle = gradient;
-  ctx.beginPath(); ctx.moveTo(298, 60); ctx.lineTo(358, 66); ctx.lineTo(358, 240); ctx.lineTo(298, 252); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.28)";
-  ctx.lineWidth = 1;
+function frontArc(ctx: Ctx, y: number, radius: number, width: number, style: string | CanvasGradient) {
+  const e = ringEllipse(y, radius);
+  ctx.strokeStyle = style;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.ellipse(e.cx, e.cy, e.rx, e.ry, 0, 0.04, Math.PI - 0.04);
   ctx.stroke();
-  // tube front edges and lip
-  ctx.strokeStyle = "rgba(236, 246, 255, 0.55)";
-  ctx.beginPath(); ctx.moveTo(TUBE.x0 + 0.5, TUBE.y0); ctx.lineTo(TUBE.x0 + 0.5, TUBE.y1); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(TUBE.x1 - 0.5, TUBE.y0); ctx.lineTo(TUBE.x1 - 0.5, TUBE.y1); ctx.stroke();
-  ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-  ctx.fillRect(TUBE.x0 + 3, TUBE.y0, 2.5, TUBE.y1 - TUBE.y0);
-  ctx.strokeStyle = "rgba(236, 246, 255, 0.5)";
-  ctx.beginPath(); ctx.ellipse(TUBE_CENTER_X, TUBE.y1, (TUBE.x1 - TUBE.x0) / 2, 3, 0, 0, Math.PI * 2); ctx.stroke();
-  // glass top edge
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-  ctx.fillRect(98, 58, 200, 4);
+}
+
+const BASE_TOP = -1.02;
+const BASE_BOTTOM = -1.2;
+const COLUMN_BOTTOM = -1.02;
+const COLLAR_TOP = FLOOR_Y;
+const COLLAR_BOTTOM = FLOOR_Y - 0.1;
+const COLUMN_RADIUS = 0.98;
+const COLLAR_OUTER = 1.0;
+const COLLAR_INNER = 0.86;
+const LED_Y = -0.86;
+
+/** Everything behind the balls: glow, shadow, pedestal, collar, floor and the inside back of the globe. */
+function drawBackLayer(ctx: Ctx) {
+  const globe = globeCircle(GLOBE_RADIUS);
+  // soft ambient light behind the machine
+  let g = ctx.createRadialGradient(globe.x, globe.y, 10, globe.x, globe.y, 300);
+  g.addColorStop(0, "rgba(120, 150, 255, 0.13)");
+  g.addColorStop(0.55, "rgba(120, 90, 200, 0.05)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  // contact shadow on the ground
+  const ground = ringEllipse(BASE_BOTTOM - 0.01, 1.7);
+  g = ctx.createRadialGradient(ground.cx, ground.cy, 4, ground.cx, ground.cy, ground.rx);
+  g.addColorStop(0, "rgba(0,0,0,0.75)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.save();
+  ctx.translate(ground.cx, ground.cy);
+  ctx.scale(1, ground.ry / ground.rx);
+  ctx.translate(-ground.cx, -ground.cy);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(ground.cx, ground.cy, ground.rx, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // wide base plate
+  const baseTop = ringEllipse(BASE_TOP, 1.24);
+  g = ctx.createLinearGradient(baseTop.cx - baseTop.rx, 0, baseTop.cx + baseTop.rx, 0);
+  g.addColorStop(0, "#1b1a22"); g.addColorStop(0.5, "#2c2a35"); g.addColorStop(1, "#121118");
+  cylinder(ctx, BASE_TOP, BASE_BOTTOM, 1.24, [[0, "#0b0a0f"], [0.28, "#2d2b38"], [0.5, "#3a3846"], [0.78, "#17161d"], [1, "#07070a"]], g);
+  frontArc(ctx, BASE_TOP, 1.24, 1.6, GOLD);
+  // column
+  const columnTop = ringEllipse(COLLAR_BOTTOM, COLUMN_RADIUS);
+  g = ctx.createLinearGradient(columnTop.cx - columnTop.rx, 0, columnTop.cx + columnTop.rx, 0);
+  g.addColorStop(0, "#15141a"); g.addColorStop(1, "#15141a");
+  cylinder(ctx, COLLAR_BOTTOM, COLUMN_BOTTOM, COLUMN_RADIUS,
+    [[0, "#08080b"], [0.22, "#1d1c25"], [0.42, "#34323f"], [0.55, "#2a2833"], [0.82, "#0e0d13"], [1, "#050507"]], g);
+  // collar: a champagne ring the globe sits in
+  const collarTop = ringEllipse(COLLAR_TOP, COLLAR_OUTER);
+  g = ctx.createLinearGradient(collarTop.cx - collarTop.rx, 0, collarTop.cx + collarTop.rx, 0);
+  g.addColorStop(0, GOLD_DARK); g.addColorStop(0.3, GOLD_LIGHT); g.addColorStop(0.6, GOLD); g.addColorStop(1, GOLD_DARK);
+  cylinder(ctx, COLLAR_TOP, COLLAR_BOTTOM, COLLAR_OUTER,
+    [[0, GOLD_DARK], [0.25, GOLD_LIGHT], [0.5, GOLD], [0.8, "#8c6a30"], [1, "#4a3717"]], g);
+  // the floor inside the collar: glossy dark disc with faint rings
+  const floor = ringEllipse(COLLAR_TOP, COLLAR_INNER);
+  g = ctx.createRadialGradient(floor.cx, floor.cy - floor.ry * 0.3, 4, floor.cx, floor.cy, floor.rx);
+  g.addColorStop(0, "#2d2a38"); g.addColorStop(0.6, "#15141b"); g.addColorStop(1, "#08080b");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(floor.cx, floor.cy, floor.rx, floor.ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.07)";
+  ctx.lineWidth = 0.8;
+  for (const ring of [0.3, 0.5, 0.7]) {
+    ctx.beginPath(); ctx.ellipse(floor.cx, floor.cy, floor.rx * ring, floor.ry * ring, 0, 0, Math.PI * 2); ctx.stroke();
+  }
+  // air hub in the middle of the floor
+  const hub = ringEllipse(COLLAR_TOP + 0.005, 0.2);
+  g = ctx.createLinearGradient(hub.cx - hub.rx, 0, hub.cx + hub.rx, 0);
+  g.addColorStop(0, GOLD_DARK); g.addColorStop(0.4, GOLD_LIGHT); g.addColorStop(1, GOLD_DARK);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(hub.cx, hub.cy, hub.rx, hub.ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#050507";
+  ctx.beginPath(); ctx.ellipse(hub.cx, hub.cy, hub.rx * 0.55, hub.ry * 0.55, 0, 0, Math.PI * 2); ctx.fill();
+
+  // the inside back of the glass gives the globe depth
+  g = ctx.createRadialGradient(globe.x - globe.r * 0.2, globe.y - globe.r * 0.3, globe.r * 0.1, globe.x, globe.y, globe.r);
+  g.addColorStop(0, "rgba(70, 90, 140, 0.10)");
+  g.addColorStop(0.85, "rgba(30, 38, 70, 0.22)");
+  g.addColorStop(1, "rgba(14, 18, 34, 0.45)");
+  ctx.save();
+  clipAboveCollar(ctx);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(globe.x, globe.y, globe.r, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+/** Clips to everything above the front edge of the collar, so the globe appears to sit inside it. */
+function clipAboveCollar(ctx: Ctx) {
+  const edge = ringEllipse(COLLAR_TOP, COLLAR_OUTER);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(LOGICAL_WIDTH, 0);
+  ctx.lineTo(LOGICAL_WIDTH, edge.cy);
+  ctx.lineTo(edge.cx + edge.rx, edge.cy);
+  ctx.ellipse(edge.cx, edge.cy, edge.rx, edge.ry, 0, 0, Math.PI, false);
+  ctx.lineTo(0, edge.cy);
+  ctx.closePath();
+  ctx.clip();
+}
+
+/** The glass: reflections and rim over the balls, the front of the collar, the chimney and its cap. */
+function drawFrontLayer(ctx: Ctx) {
+  const globe = globeCircle(GLOBE_RADIUS);
+  ctx.save();
+  clipAboveCollar(ctx);
+  // glass body: clear in the middle, brighter toward the edge (fresnel)
+  let g = ctx.createRadialGradient(globe.x - globe.r * 0.2, globe.y - globe.r * 0.25, globe.r * 0.2, globe.x, globe.y, globe.r);
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  g.addColorStop(0.72, "rgba(150,205,255,0.05)");
+  g.addColorStop(0.93, "rgba(170,220,255,0.16)");
+  g.addColorStop(1, "rgba(225,245,255,0.38)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(globe.x, globe.y, globe.r, 0, Math.PI * 2); ctx.fill();
+  // rim light
+  g = ctx.createLinearGradient(globe.x - globe.r, globe.y - globe.r, globe.x + globe.r, globe.y + globe.r);
+  g.addColorStop(0, "rgba(255,255,255,0.85)");
+  g.addColorStop(0.45, "rgba(140,200,255,0.18)");
+  g.addColorStop(0.7, "rgba(255,255,255,0.12)");
+  g.addColorStop(1, "rgba(200,235,255,0.5)");
+  ctx.strokeStyle = g;
+  ctx.lineWidth = 2.2;
+  ctx.beginPath(); ctx.arc(globe.x, globe.y, globe.r - 1, 0, Math.PI * 2); ctx.stroke();
+  // main curved highlight, upper left
+  ctx.save();
+  ctx.translate(globe.x - globe.r * 0.42, globe.y - globe.r * 0.5);
+  ctx.rotate(-0.72);
+  g = ctx.createLinearGradient(-globe.r * 0.4, 0, globe.r * 0.4, 0);
+  g.addColorStop(0, "rgba(255,255,255,0)");
+  g.addColorStop(0.35, "rgba(255,255,255,0.5)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(0, 0, globe.r * 0.4, globe.r * 0.09, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  // small secondary glints
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.beginPath(); ctx.ellipse(globe.x + globe.r * 0.55, globe.y + globe.r * 0.42, globe.r * 0.15, globe.r * 0.04, -0.85, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.beginPath(); ctx.ellipse(globe.x + globe.r * 0.2, globe.y - globe.r * 0.78, globe.r * 0.12, globe.r * 0.03, 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // front half of the collar
+  const outer = ringEllipse(COLLAR_TOP, COLLAR_OUTER);
+  const inner = ringEllipse(COLLAR_TOP, COLLAR_INNER);
+  g = ctx.createLinearGradient(outer.cx - outer.rx, 0, outer.cx + outer.rx, 0);
+  g.addColorStop(0, GOLD_DARK); g.addColorStop(0.3, GOLD_LIGHT); g.addColorStop(0.62, GOLD); g.addColorStop(1, GOLD_DARK);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(outer.cx, outer.cy, outer.rx, outer.ry, 0, 0, Math.PI, false);
+  ctx.ellipse(inner.cx, inner.cy, inner.rx, inner.ry, 0, Math.PI, 0, true);
+  ctx.closePath();
+  ctx.fill();
+  frontArc(ctx, COLLAR_TOP, COLLAR_INNER, 1, "rgba(0,0,0,0.5)");
+
+  // intake ring where the chimney meets the globe
+  const intake = ringEllipse(TUBE_BOTTOM_Y - 0.02, TUBE_RADIUS * 1.5);
+  g = ctx.createLinearGradient(intake.cx - intake.rx, 0, intake.cx + intake.rx, 0);
+  g.addColorStop(0, GOLD_DARK); g.addColorStop(0.4, GOLD_LIGHT); g.addColorStop(1, GOLD_DARK);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(intake.cx, intake.cy, intake.rx, intake.ry + 1.5, 0, 0, Math.PI * 2); ctx.fill();
+
+  // the glass chimney
+  const tubeBottom = ringEllipse(TUBE_BOTTOM_Y, TUBE_RADIUS);
+  const tubeTop = ringEllipse(TUBE_TOP_Y, TUBE_RADIUS);
+  g = ctx.createLinearGradient(tubeBottom.cx - tubeBottom.rx, 0, tubeBottom.cx + tubeBottom.rx, 0);
+  g.addColorStop(0, "rgba(220,240,255,0.30)");
+  g.addColorStop(0.3, "rgba(220,240,255,0.06)");
+  g.addColorStop(0.7, "rgba(220,240,255,0.04)");
+  g.addColorStop(1, "rgba(220,240,255,0.26)");
+  ctx.fillStyle = g;
+  ctx.fillRect(tubeBottom.cx - tubeBottom.rx, tubeTop.cy, tubeBottom.rx * 2, tubeBottom.cy - tubeTop.cy);
+  ctx.strokeStyle = "rgba(235,248,255,0.6)";
+  ctx.lineWidth = 1.1;
+  ctx.beginPath(); ctx.moveTo(tubeBottom.cx - tubeBottom.rx, tubeTop.cy); ctx.lineTo(tubeBottom.cx - tubeBottom.rx, tubeBottom.cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tubeBottom.cx + tubeBottom.rx, tubeTop.cy); ctx.lineTo(tubeBottom.cx + tubeBottom.rx, tubeBottom.cy); ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.22)";
+  ctx.fillRect(tubeBottom.cx - tubeBottom.rx + 3, tubeTop.cy + 2, 2.4, tubeBottom.cy - tubeTop.cy - 4);
+  // champagne cap with a small finial
+  g = ctx.createLinearGradient(tubeTop.cx - tubeTop.rx * 1.3, 0, tubeTop.cx + tubeTop.rx * 1.3, 0);
+  g.addColorStop(0, GOLD_DARK); g.addColorStop(0.35, GOLD_LIGHT); g.addColorStop(0.7, GOLD); g.addColorStop(1, GOLD_DARK);
+  const capTop = ringEllipse(TUBE_TOP_Y + 0.1, TUBE_RADIUS * 1.3);
+  const capBottom = ringEllipse(TUBE_TOP_Y, TUBE_RADIUS * 1.3);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(capTop.cx - capTop.rx, capTop.cy);
+  ctx.lineTo(capBottom.cx - capBottom.rx, capBottom.cy);
+  ctx.ellipse(capBottom.cx, capBottom.cy, capBottom.rx, capBottom.ry, 0, Math.PI, 0, true);
+  ctx.lineTo(capTop.cx + capTop.rx, capTop.cy);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = GOLD_LIGHT;
+  ctx.beginPath(); ctx.ellipse(capTop.cx, capTop.cy, capTop.rx, capTop.ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = GOLD;
+  ctx.beginPath(); ctx.arc(capTop.cx, capTop.cy - 4, 3.2, 0, Math.PI * 2); ctx.fill();
+  // tube back lip inside the cap
+  ctx.strokeStyle = "rgba(235,248,255,0.45)";
+  ctx.beginPath(); ctx.ellipse(tubeBottom.cx, tubeBottom.cy, tubeBottom.rx, tubeBottom.ry, 0, 0, Math.PI); ctx.stroke();
 }
 
 function makeSprite(color: string, label: string, scale: number): HTMLCanvasElement {
-  const size = Math.max(8, Math.ceil(BALL_RADIUS * 2 * scale));
+  const size = Math.max(10, Math.ceil(2 * 21 * scale));
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -136,15 +270,15 @@ function makeSprite(color: string, label: string, scale: number): HTMLCanvasElem
   const r = c - 0.5;
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.arc(c, c, r, 0, Math.PI * 2); ctx.fill();
-  // shading: soft edge darkening and a highlight
+  // lacquer shading: dark edge, soft highlight, tiny bright specular
   let gradient = ctx.createRadialGradient(c - r * 0.25, c - r * 0.3, r * 0.1, c, c, r);
   gradient.addColorStop(0, "rgba(0,0,0,0)");
-  gradient.addColorStop(0.7, "rgba(0,0,0,0.08)");
-  gradient.addColorStop(1, "rgba(0,0,0,0.5)");
+  gradient.addColorStop(0.65, "rgba(0,0,0,0.10)");
+  gradient.addColorStop(1, "rgba(0,0,0,0.55)");
   ctx.fillStyle = gradient;
   ctx.beginPath(); ctx.arc(c, c, r, 0, Math.PI * 2); ctx.fill();
-  gradient = ctx.createRadialGradient(c - r * 0.38, c - r * 0.42, 0, c - r * 0.38, c - r * 0.42, r * 0.55);
-  gradient.addColorStop(0, "rgba(255,255,255,0.75)");
+  gradient = ctx.createRadialGradient(c - r * 0.4, c - r * 0.45, 0, c - r * 0.4, c - r * 0.45, r * 0.6);
+  gradient.addColorStop(0, "rgba(255,255,255,0.7)");
   gradient.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = gradient;
   ctx.beginPath(); ctx.arc(c, c, r, 0, Math.PI * 2); ctx.fill();
@@ -156,28 +290,39 @@ function makeSprite(color: string, label: string, scale: number): HTMLCanvasElem
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, c, c + r * 0.04);
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.arc(c - r * 0.5, c - r * 0.55, r * 0.07, 0, Math.PI * 2); ctx.fill();
   return canvas;
 }
 
+// ----- the component ---------------------------------------------------------------------------------------
+
+/** LED colour of the pedestal ring for each phase. */
+function ledColor(phase: MachinePhase, now: number): { rgb: string; alpha: number } {
+  if (phase === "mixing") return { rgb: "255, 170, 70", alpha: 0.65 + 0.3 * Math.sin(now / 90) };
+  if (phase === "revealing") return { rgb: "255, 226, 150", alpha: 0.95 };
+  if (phase === "revealed") return { rgb: "255, 214, 120", alpha: 0.85 };
+  return { rgb: "94, 242, 214", alpha: 0.5 + 0.2 * Math.sin(now / 700) };
+}
+
 /**
- * The lottery machine, drawn live on a canvas: a black cabinet with a glass chamber full of numbered balls,
- * an air jet that tosses them around, and a transparent selection tube. States:
- *   idle      -> balls resting in a pile
- *   mixing    -> air on, balls bounce and tumble for as long as the draw lasts
- *   revealing -> air fades, one ball is guided into the tube and rises to the top, then is pulled into focus
+ * The lottery machine: a glass globe on an obsidian pedestal, drawn in real perspective on a canvas.
+ * Numbered lacquer balls tumble in an air jet; the winning ball is drawn up into a glass chimney on top.
+ *   idle      -> balls resting on the floor, LED ring breathing
+ *   mixing    -> air jet on, balls circulate in 3D for as long as the draw lasts
+ *   revealing -> the air fades, one ball is lifted into the chimney, then pulled into focus
  *   revealed  -> the winning ball stays in focus
  * The machine only presents the draw; the winner is decided by the database / selection engine.
  */
 export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealComplete, participantCount }: LotteryMachineProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<Sim | null>(null);
-  const layersRef = useRef<{ back: HTMLCanvasElement; front: HTMLCanvasElement; scale: number } | null>(null);
+  const layersRef = useRef<{ back: HTMLCanvasElement; front: HTMLCanvasElement } | null>(null);
   const spritesRef = useRef(new Map<Ball, HTMLCanvasElement>());
   const scaleRef = useRef(1);
   const phaseRef = useRef<MachinePhase>(phase);
   const rafRef = useRef(0);
   const hideChosenRef = useRef(false);
-  const glowRef = useRef(0);
   const labelRef = useRef({ ballLabel, ballColor });
   labelRef.current = { ballLabel, ballColor };
   const colorsKey = colors.join("|");
@@ -196,37 +341,124 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
     return sprite;
   };
 
-  const draw = () => {
+  const draw = (now = performance.now()) => {
     const canvas = canvasRef.current;
     const sim = simRef.current;
     const layers = layersRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx || !sim || !layers) return;
     const scale = scaleRef.current;
+    const current = phaseRef.current;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(layers.back, 0, 0);
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    for (const ball of sim.balls) {
-      if (ball === sim.chosen && hideChosenRef.current) continue;
-      const sprite = spriteFor(ball);
-      ctx.drawImage(sprite, ball.x - BALL_RADIUS, ball.y - BALL_RADIUS, BALL_RADIUS * 2, BALL_RADIUS * 2);
+
+    // pedestal LED ring
+    const led = ledColor(current, now);
+    const ledEllipse = ringEllipse(LED_Y, COLUMN_RADIUS + 0.005);
+    for (const [width, strength] of [[9, 0.12], [5, 0.25], [2.2, 0.95]] as const) {
+      ctx.strokeStyle = `rgba(${led.rgb}, ${Math.max(0, led.alpha * strength)})`;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.ellipse(ledEllipse.cx, ledEllipse.cy, ledEllipse.rx, ledEllipse.ry, 0, 0.05, Math.PI - 0.05);
+      ctx.stroke();
     }
+    // light spilling onto the ground from the LED
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const spill = ringEllipse(BASE_BOTTOM, 1.55);
+    const spillGradient = ctx.createRadialGradient(spill.cx, spill.cy, 8, spill.cx, spill.cy, spill.rx);
+    spillGradient.addColorStop(0, `rgba(${led.rgb}, ${0.10 * led.alpha})`);
+    spillGradient.addColorStop(1, `rgba(${led.rgb}, 0)`);
+    ctx.fillStyle = spillGradient;
+    ctx.save();
+    ctx.translate(spill.cx, spill.cy);
+    ctx.scale(1, spill.ry / spill.rx);
+    ctx.beginPath(); ctx.arc(0, 0, spill.rx, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // the jet of air from the hub
+    if (sim.air > 0.02) {
+      const hub = project(0, FLOOR_Y, 0);
+      const jet = ctx.createRadialGradient(hub.x, hub.y, 2, hub.x, hub.y - 40, 70);
+      jet.addColorStop(0, `rgba(190, 225, 255, ${0.55 * sim.air})`);
+      jet.addColorStop(1, "rgba(190, 225, 255, 0)");
+      ctx.fillStyle = jet;
+      ctx.beginPath(); ctx.ellipse(hub.x, hub.y - 18, 46, 62, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    // shadows of the balls on the floor
+    ctx.save();
+    ctx.fillStyle = "#000";
+    for (const ball of sim.balls) {
+      const height = ball.y - FLOOR_Y - ball.r;
+      if (height > 0.9 || ball === sim.chosen && hideChosenRef.current) continue;
+      const point = project(ball.x, FLOOR_Y + 0.004, ball.z);
+      const radius = ball.r * point.scale * (1 + height * 0.35);
+      ctx.globalAlpha = Math.max(0, 0.42 - height * 0.5);
+      ctx.beginPath(); ctx.ellipse(point.x, point.y, radius, radius * PITCH_SIN, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+
+    // balls, far to near
+    const projected = sim.balls.map((ball) => ({ ball, p: project(ball.x, ball.y, ball.z) }))
+      .filter(({ ball }) => !(ball === sim.chosen && hideChosenRef.current))
+      .sort((a, b) => b.p.depth - a.p.depth);
+    for (const { ball, p } of projected) {
+      const radius = ball.r * p.scale;
+      ctx.drawImage(spriteFor(ball), p.x - radius, p.y - radius, radius * 2, radius * 2);
+      // balls at the back of the globe are slightly darker, which sells the depth
+      const far = Math.min(1, Math.max(0, (p.depth - (CAMERA.distance - 0.9)) / 1.8));
+      if (far > 0.02) {
+        ctx.fillStyle = `rgba(6, 8, 18, ${far * 0.4})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // airborne dust in the jet while mixing
+    if (sim.air > 0.05) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < 34; i += 1) {
+        const phaseOffset = i * 0.61803;
+        const travel = ((sim.t * (0.55 + (i % 5) * 0.08) + phaseOffset) % 1);
+        const angle = phaseOffset * 9 + sim.t * 1.4;
+        const rho = 0.08 + ((i * 37) % 100) / 100 * 0.42;
+        const y = FLOOR_Y + 0.05 + travel * 1.45;
+        const p = project(Math.cos(angle) * rho, y, Math.sin(angle) * rho);
+        ctx.fillStyle = `rgba(210, 235, 255, ${0.28 * sim.air * (1 - travel)})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 1.1 + (i % 3) * 0.4, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(layers.front, 0, 0);
-    // red indicator light around the tube while a draw is running
-    if (glowRef.current > 0.01) {
+
+    // chimney light: amber while mixing, bright gold when the ball rises
+    if (current === "mixing" || current === "revealing" || current === "revealed") {
       ctx.save();
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       ctx.globalCompositeOperation = "lighter";
-      const glow = ctx.createRadialGradient(TUBE_CENTER_X, 84, 2, TUBE_CENTER_X, 84, 52);
-      glow.addColorStop(0, `rgba(255, 70, 60, ${0.85 * glowRef.current})`);
-      glow.addColorStop(0.35, `rgba(255, 40, 40, ${0.38 * glowRef.current})`);
-      glow.addColorStop(1, "rgba(255, 30, 30, 0)");
+      const top = project(0, TUBE_TOP_Y - 0.2, 0);
+      const strength = current === "mixing" ? 0.35 + 0.15 * Math.sin(now / 130) : 0.9;
+      const glow = ctx.createRadialGradient(top.x, top.y, 2, top.x, top.y, 62);
+      glow.addColorStop(0, `rgba(255, 215, 130, ${0.8 * strength})`);
+      glow.addColorStop(0.4, `rgba(255, 170, 80, ${0.3 * strength})`);
+      glow.addColorStop(1, "rgba(255, 150, 60, 0)");
       ctx.fillStyle = glow;
-      ctx.fillRect(TUBE_CENTER_X - 56, 40, 112, 100);
-      ctx.fillStyle = `rgba(255, 190, 190, ${0.9 * glowRef.current})`;
-      ctx.beginPath(); ctx.arc(TUBE_CENTER_X, 66, 3.2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillRect(top.x - 70, top.y - 70, 140, 140);
+      if (current !== "mixing") {
+        // a column of light in the chimney while the ball rises
+        const bottom = project(0, TUBE_BOTTOM_Y, 0);
+        const beam = ctx.createLinearGradient(0, top.y, 0, bottom.y);
+        beam.addColorStop(0, `rgba(255, 226, 150, ${0.28 * strength})`);
+        beam.addColorStop(1, "rgba(255, 226, 150, 0)");
+        ctx.fillStyle = beam;
+        ctx.fillRect(top.x - TUBE_RADIUS * top.scale * 0.8, top.y, TUBE_RADIUS * top.scale * 1.6, bottom.y - top.y);
+      }
       ctx.restore();
     }
   };
@@ -238,7 +470,6 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
     simRef.current = sim;
     spritesRef.current = new Map();
     hideChosenRef.current = false;
-    glowRef.current = 0;
   };
 
   // size the canvas to its container (crisp on every screen) and rebuild the static layers
@@ -254,19 +485,15 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
       canvas.height = Math.round(LOGICAL_HEIGHT * scale);
       scaleRef.current = scale;
       spritesRef.current = new Map();
-      const layer = () => {
+      const layer = (paint: (ctx: Ctx) => void) => {
         const element = document.createElement("canvas");
         element.width = canvas.width;
         element.height = canvas.height;
         const context = element.getContext("2d");
-        context?.setTransform(scale, 0, 0, scale, 0, 0);
-        return { element, context };
+        if (context) { context.setTransform(scale, 0, 0, scale, 0, 0); paint(context); }
+        return element;
       };
-      const back = layer();
-      const front = layer();
-      if (back.context) drawBackLayer(back.context);
-      if (front.context) drawFrontLayer(front.context);
-      layersRef.current = { back: back.element, front: front.element, scale };
+      layersRef.current = { back: layer(drawBackLayer), front: layer(drawFrontLayer) };
       if (!simRef.current) rebuildPile();
       draw();
     };
@@ -286,7 +513,7 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colorsKey, participantCount]);
 
-  // the winner's number can arrive while the ball is already rising: update the ball in the tube
+  // the winner's number can arrive while the ball is already rising: update the ball in the chimney
   useEffect(() => {
     const sim = simRef.current;
     if (!sim?.chosen || (phaseRef.current !== "revealing" && phaseRef.current !== "revealed")) return;
@@ -301,20 +528,22 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
     phaseRef.current = phase;
     const timers: number[] = [];
     const stopLoop = () => { window.cancelAnimationFrame(rafRef.current); rafRef.current = 0; };
-    const startLoop = () => {
+    const startLoop = (animateOnly = false) => {
       stopLoop();
       let last = performance.now();
       let accumulator = 0;
+      let lastPaint = 0;
       const frame = (now: number) => {
         const sim = simRef.current;
         if (!sim) return;
         const elapsed = Math.min(0.05, (now - last) / 1000);
         last = now;
-        accumulator += elapsed;
-        while (accumulator >= 1 / 120) { stepSim(sim); accumulator -= 1 / 120; }
-        const target = phaseRef.current === "mixing" ? 0.45 + 0.2 * Math.sin(now / 130) : 0.95;
-        glowRef.current += (target - glowRef.current) * Math.min(1, elapsed * 6);
-        draw();
+        if (!animateOnly) {
+          accumulator += elapsed;
+          while (accumulator >= 1 / 120) { stepSim(sim); accumulator -= 1 / 120; }
+        }
+        // the idle picture only needs the LED to breathe, so it repaints at a lower rate
+        if (!animateOnly || now - lastPaint > 45) { lastPaint = now; if (!document.hidden) draw(now); }
         rafRef.current = window.requestAnimationFrame(frame);
       };
       rafRef.current = window.requestAnimationFrame(frame);
@@ -322,10 +551,10 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
     const reduced = (() => { try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; } })();
 
     if (phase === "idle") {
-      stopLoop();
       setFocus("off");
       rebuildPile();
       draw();
+      if (!reduced) startLoop(true); else stopLoop();
     } else if (phase === "mixing") {
       setFocus("off");
       if (!simRef.current) rebuildPile();
@@ -344,15 +573,13 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
       hideChosenRef.current = false;
       startLoop();
       timers.push(window.setTimeout(() => { hideChosenRef.current = true; setFocus("animating"); }, REVEAL_RISE_MS));
-      timers.push(window.setTimeout(() => { setFocus("done"); stopLoop(); draw(); completeRef.current(); }, REVEAL_RISE_MS + FOCUS_MS));
+      timers.push(window.setTimeout(() => { setFocus("done"); completeRef.current(); }, REVEAL_RISE_MS + FOCUS_MS));
     } else {
       // revealed: the winning ball stays in focus (drawn by the overlay)
-      stopLoop();
       const sim = simRef.current;
       if (sim?.chosen) hideChosenRef.current = true;
-      glowRef.current = 0.9;
       setFocus("done");
-      draw();
+      if (!reduced) startLoop(true); else { stopLoop(); draw(); }
     }
     return () => { timers.forEach((id) => window.clearTimeout(id)); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -363,11 +590,15 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   const focused = focus !== "off";
   const label = phase === "idle" ? `Lottery machine with ${participantCount} participant${participantCount === 1 ? "" : "s"} ready`
     : phase === "mixing" ? "Lottery machine mixing the balls"
-      : phase === "revealing" ? "The winning ball is rising through the tube" : "The winning ball has been drawn";
+      : phase === "revealing" ? "The winning ball is rising through the glass chimney" : "The winning ball has been drawn";
 
   return <div className={`lottery-machine${phase === "mixing" ? " is-mixing" : ""}${focused ? " is-focused" : ""}`}
     data-phase={phase}
-    style={{ ["--ball-color" as string]: ballColor, ["--focus-ms" as string]: `${FOCUS_MS}ms` }}>
+    style={{
+      ["--ball-color" as string]: ballColor, ["--focus-ms" as string]: `${FOCUS_MS}ms`,
+      ["--focus-x" as string]: `${FOCUS_X}%`, ["--focus-y" as string]: `${FOCUS_Y}%`,
+      ["--focus-size" as string]: `${FOCUS_START_SIZE}%`, ["--focus-scale" as string]: FOCUS_SCALE,
+    }}>
     <div className="machine-glow" aria-hidden="true" />
     <canvas ref={canvasRef} className="machine-art" role="img" aria-label={label} />
     {focused && <div className={`focus-ball focus-${focus} digits-${Math.min(3, ballLabel.length)}`} aria-hidden="true">

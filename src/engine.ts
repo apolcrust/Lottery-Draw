@@ -71,13 +71,27 @@ export function selectWinner(
   participants: readonly Participant[],
   overrideId: string | null,
   overrideActivated: boolean,
+  excludedIds: readonly string[] = [],
 ): LocalSelection {
   if (participants.length === 0) throw new RangeError("There are no eligible participants.");
   if (overrideActivated && overrideId) {
     const index = participants.findIndex((participant) => participant.id === overrideId);
     if (index >= 0) return { index, mode: "controlled" };
   }
-  return { index: pickWeightedIndex(participants), mode: selectionModeFor(participants) };
+  // The random draw only considers participants the operator has not excluded.
+  const excluded = new Set(excludedIds);
+  const pool = participants.filter((participant) => !excluded.has(participant.id));
+  if (pool.length === 0) {
+    throw new RangeError("Every remaining participant is excluded from the random draw. Remove someone from the excluded list first.");
+  }
+  const chosen = pool[pickWeightedIndex(pool)];
+  return { index: participants.findIndex((participant) => participant.id === chosen.id), mode: selectionModeFor(pool) };
+}
+
+/** Excluded ids that are still on the roster (winners and removed people drop out of the list). */
+export function pruneExcluded(excludedIds: readonly string[], participants: readonly Participant[]): string[] {
+  const present = new Set(participants.map((participant) => participant.id));
+  return [...new Set(excludedIds)].filter((id) => present.has(id));
 }
 
 export function removeParticipantById(participants: readonly Participant[], id: string): Participant[] {

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type * as XLSX from "xlsx";
 import {
-  Ban, Check, CircleHelp, Clock3, Copy, Download, FileSpreadsheet, Fullscreen, History, Keyboard,
+  Ban, Check, EyeOff, CircleHelp, Clock3, Copy, Download, FileSpreadsheet, Fullscreen, History, Keyboard,
   ListPlus, LoaderCircle, LockKeyhole, Plus, RotateCcw, Search, Settings2, ShieldCheck,
   Music, Sparkles, Trash2, Trophy, Upload, VolumeX, X,
 } from "lucide-react";
-import { selectWinner } from "./engine";
+import { pruneExcluded, selectWinner } from "./engine";
 import { ballColorFor, formatTicket } from "./ballColors";
 import { formatWinnerTime, winnersInDrawOrder } from "./winnerHistory";
 import { loadData, publicEventData, saveData, validateData } from "./storage";
@@ -21,7 +21,7 @@ import { findDuplicateParticipantIds, normalizeParticipantName, removeDuplicateP
 import {
   beginLotteryDraw, cancelLotteryDraw, clearPendingDraw, createLotteryEvent, deleteLotteryEvent, errorText,
   fetchLotteryEvent, fetchOverride, finishLotteryDraw, importLotteryParticipants, listOwnedEvents, loadPendingDraw,
-  manageLotteryParticipants, saveLotteryEventData, savePendingDraw, setOverride, subscribeToLotteryEvent,
+  manageLotteryParticipants, saveLotteryEventData, savePendingDraw, setExcluded, setOverride, subscribeToLotteryEvent,
   type LotteryEventRow, type OwnedEventSummary, type ParticipantAction,
 } from "./services/lotteryService";
 import type { Session } from "@supabase/supabase-js";
@@ -389,6 +389,7 @@ function App() {
       overrideParticipantId: dataRef.current.overrideParticipantId,
       overrideActivated: dataRef.current.overrideActivated,
     };
+    merged.excludedParticipantIds = pruneExcluded(dataRef.current.excludedParticipantIds, incoming.participants);
     const keepLocalOverride = merged.overrideParticipantId !== null &&
       incoming.participants.some((person) => person.id === merged.overrideParticipantId);
     if (!keepLocalOverride) { merged.overrideParticipantId = null; merged.overrideActivated = false; }
@@ -416,7 +417,8 @@ function App() {
       const secret = await fetchOverride(supabase, eventId);
       if (overridePending.current > 0 || !mountedRef.current) return;
       setData((current) => current.overrideParticipantId === secret.overrideParticipantId &&
-        current.overrideActivated === secret.overrideActivated ? current : { ...current, ...secret });
+        current.overrideActivated === secret.overrideActivated &&
+        JSON.stringify(current.excludedParticipantIds) === JSON.stringify(secret.excludedParticipantIds) ? current : { ...current, ...secret });
     } catch (error) {
       notify(errorText(error, "The predetermined winner could not be loaded."), "error");
     }
@@ -592,6 +594,18 @@ function App() {
       .filter(({ participant }) => participant.name.toLocaleLowerCase().includes(query));
   }, [data.participants, overrideSearch]);
   const selectedOverrideParticipant = data.participants.find((person) => person.id === data.overrideParticipantId);
+  const excludedSet = useMemo(() => new Set(data.excludedParticipantIds), [data.excludedParticipantIds]);
+  const excludedParticipants = useMemo(
+    () => data.participants.map((participant, index) => ({ participant, index })).filter(({ participant }) => excludedSet.has(participant.id)),
+    [data.participants, excludedSet],
+  );
+  const [excludeSearch, setExcludeSearch] = useState("");
+  const filteredExcludeParticipants = useMemo(() => {
+    const query = excludeSearch.trim().toLocaleLowerCase();
+    return data.participants
+      .map((participant, index) => ({ participant, index }))
+      .filter(({ participant }) => participant.name.toLocaleLowerCase().includes(query));
+  }, [data.participants, excludeSearch]);
   const duplicateParticipantIds = useMemo(() => findDuplicateParticipantIds(data.participants), [data.participants]);
   const newNameAlreadyExists = !isOperator && newName.trim() !== "" && data.participants.some(
     (person) => normalizeParticipantName(person.name) === normalizeParticipantName(newName),
@@ -614,6 +628,32 @@ function App() {
         .finally(() => { overridePending.current -= 1; });
     }
   }, [eventId, isOperator, notify]);
+
+  // The excluded list is operator-only and stored privately, exactly like the one-time pick.
+  const commitExcluded = useCallback((ids: string[]) => {
+    setData((current) => ({ ...current, excludedParticipantIds: ids }));
+    const client = supabase;
+    if (client && eventId && isOperator) {
+      overridePending.current += 1;
+      overrideQueue.current = overrideQueue.current.catch(() => undefined)
+        .then(() => setExcluded(client, eventId, ids))
+        .catch((error: unknown) => notify(errorText(error, "The excluded list could not be saved."), "error"))
+        .finally(() => { overridePending.current -= 1; });
+    }
+  }, [eventId, isOperator, notify]);
+
+  const toggleExcluded = (id: string) => {
+    if (drawLocked) return;
+    const current = dataRef.current.excludedParticipantIds;
+    commitExcluded(current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]);
+  };
+
+  // winners and removed people drop out of the excluded list automatically
+  useEffect(() => {
+    if (!(isOperator || !supabase) || data.excludedParticipantIds.length === 0) return;
+    const valid = pruneExcluded(data.excludedParticipantIds, data.participants);
+    if (valid.length !== data.excludedParticipantIds.length) commitExcluded(valid);
+  }, [data.participants, data.excludedParticipantIds, isOperator, commitExcluded]);
 
   const activateOverride = useCallback(() => {
     if (!eligibleOverride || drawLocked) return;
@@ -638,6 +678,7 @@ function App() {
       ...updated,
       overrideParticipantId: keep ? current.overrideParticipantId : null,
       overrideActivated: keep ? current.overrideActivated : false,
+      excludedParticipantIds: pruneExcluded(current.excludedParticipantIds, updated.participants),
     };
     receivedDataRef.current = merged;
     setData(merged);
@@ -771,7 +812,7 @@ function App() {
         savePendingDraw(eventId, ticket);
         setServerDrawing(true);
       } else {
-        const selection = selectWinner(data.participants, data.overrideParticipantId, data.overrideActivated);
+        const selection = selectWinner(data.participants, data.overrideParticipantId, data.overrideActivated, data.excludedParticipantIds);
         local = { participant: data.participants[selection.index], mode: selection.mode, ticketNumber: selection.index + 1 };
         ticket = {
           drawId: crypto.randomUUID(),
@@ -1086,6 +1127,7 @@ function App() {
       if (!window.confirm("Replace your current participants, settings, and winner history with this backup?")) return;
       setData(restored);
       commitOverride(restored.overrideParticipantId, restored.overrideActivated);
+      commitExcluded(restored.excludedParticipantIds);
       setLastWinner(null);
       setCustomPalette(restored.settings.colors.join(", "));
       notify("Backup restored.");
@@ -1099,6 +1141,7 @@ function App() {
     if (!window.confirm("Reset participants, winner history, and lottery settings? This cannot be undone.")) return;
     setData(structuredClone(DEFAULT_DATA));
     commitOverride(null, false);
+    commitExcluded([]);
     setLastWinner(null);
     setCustomPalette(DEFAULT_SETTINGS.colors.join(", "));
     notify("Session reset.");
@@ -1379,6 +1422,10 @@ function App() {
                 value={person.weight} disabled={drawLocked}
                 onChange={(event) => { const weight = Number(event.target.value); if (Number.isFinite(weight) && weight > 0 && weight <= 1000) updateParticipant(person.id, { weight }); }} />
             </> : <span className="participant-row-name">{person.name}{person.weight > 1 && <small> ×{person.weight}</small>}</span>}
+            {isOperator && <button className={`icon-button exclude-icon${excludedSet.has(person.id) ? " is-on" : ""}`} disabled={drawLocked}
+              title={excludedSet.has(person.id) ? "Excluded from the random draw. Click to include again" : "Exclude from the random draw"}
+              aria-label={`${excludedSet.has(person.id) ? "Include" : "Exclude"} ${person.name} ${excludedSet.has(person.id) ? "in" : "from"} the random draw`}
+              aria-pressed={excludedSet.has(person.id)} onClick={() => toggleExcluded(person.id)}><EyeOff size={15} /></button>}
             <button className="icon-button danger-icon" aria-label={`Remove ${person.name}`} disabled={drawLocked || rosterLocked} onClick={() => void removeParticipant(person.id)}><Trash2 size={15} /></button>
           </div>)}</div>}
         <p className="dialog-note">{isOperator
@@ -1626,8 +1673,49 @@ function App() {
             <div className="mode-note"><LockKeyhole size={13} /> How each winner was chosen is shown here in the operator console only, never to the audience.</div>
           </div>
 
+          <div className="panel-card exclude-card">
+            <div className="card-overline"><span>EXCLUDED FROM RANDOM DRAW</span><span>OPERATOR</span></div>
+            <p className="exclude-help">Names you pick here cannot win the random draw. They stay on the list and in the machine, and become eligible again as soon as you remove them from this list.</p>
+            <label className="override-search">
+              <Search size={16} aria-hidden="true" />
+              <input type="search" value={excludeSearch} disabled={drawLocked || data.participants.length === 0}
+                onChange={(event) => setExcludeSearch(event.target.value)} placeholder="Search names to exclude…" aria-label="Search participants to exclude from the random draw" />
+            </label>
+            {data.participants.length === 0 ? <p className="override-empty">Add participants first.</p> :
+              filteredExcludeParticipants.length === 0 ? <p className="override-empty">No participants match “{excludeSearch.trim()}”.</p> :
+                <div className="override-participant-list exclude-pick-list" role="listbox" aria-multiselectable="true" aria-label="Participants to exclude from the random draw">
+                  {filteredExcludeParticipants.map(({ participant, index }) => {
+                    const excluded = excludedSet.has(participant.id);
+                    return <button className={`override-participant${excluded ? " is-excluded" : ""}`} type="button" role="option"
+                      aria-selected={excluded} key={participant.id} disabled={drawLocked} onClick={() => toggleExcluded(participant.id)}>
+                      <span className="override-participant-index">{index + 1}</span>
+                      <span className="override-participant-name">{participant.name}</span>
+                      {excluded ? <EyeOff size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}
+                    </button>;
+                  })}
+                </div>}
+            <div className="exclude-actions">
+              <button className="text-button" type="button" disabled={drawLocked || filteredExcludeParticipants.length === 0 || !excludeSearch.trim()}
+                onClick={() => commitExcluded([...new Set([...data.excludedParticipantIds, ...filteredExcludeParticipants.map(({ participant }) => participant.id)])])}>
+                <EyeOff size={13} /> Exclude all shown
+              </button>
+              <button className="text-button" type="button" disabled={drawLocked || data.excludedParticipantIds.length === 0}
+                onClick={() => commitExcluded([])}><X size={13} /> Clear list</button>
+            </div>
+            <div className="exclude-summary"><strong>{excludedParticipants.length}</strong> excluded · <strong>{data.participants.length - excludedParticipants.length}</strong> can win the random draw</div>
+            {excludedParticipants.length > 0 && <ul className="exclude-chips" aria-label="Excluded participants">
+              {excludedParticipants.map(({ participant, index }) => <li key={participant.id}>
+                <span className="exclude-chip-number">{String(index + 1).padStart(2, "0")}</span>
+                <span className="exclude-chip-name">{participant.name}</span>
+                <button type="button" className="exclude-chip-remove" disabled={drawLocked} aria-label={`Remove ${participant.name} from the excluded list`}
+                  onClick={() => toggleExcluded(participant.id)}><X size={13} /></button>
+              </li>)}
+            </ul>}
+            <div className="mode-note"><LockKeyhole size={13} /> Private to you. The audience never sees this list.</div>
+          </div>
+
           <div className="panel-card stats-card">
-            <div className="stat-block"><span>IN THE MACHINE</span><strong>{data.participants.length}</strong><small>eligible participants</small></div>
+            <div className="stat-block"><span>IN THE MACHINE</span><strong>{data.participants.length}</strong><small>{excludedParticipants.length > 0 ? `${data.participants.length - excludedParticipants.length} eligible for random draw` : "eligible participants"}</small></div>
             <div className="stat-divider" />
             <div className="stat-block"><span>WINNERS DRAWN</span><strong>{data.winners.length}</strong><small>this session</small></div>
           </div>

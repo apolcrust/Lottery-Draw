@@ -72,9 +72,16 @@ create table if not exists public.lottery_event_secrets (
   event_id uuid primary key references public.lottery_events (id) on delete cascade,
   override_participant_id text,
   override_armed boolean not null default false,
+  -- participant ids the operator has excluded from the RANDOM draw (private; the audience never sees this)
+  excluded_participant_ids jsonb not null default '[]'::jsonb,
   updated_at timestamptz not null default now(),
-  constraint lottery_override_armed_needs_participant check (not override_armed or override_participant_id is not null)
+  constraint lottery_override_armed_needs_participant check (not override_armed or override_participant_id is not null),
+  constraint lottery_excluded_is_array check (jsonb_typeof(excluded_participant_ids) = 'array')
 );
+
+-- Projects created with an earlier version of this script: add the column.
+alter table public.lottery_event_secrets
+  add column if not exists excluded_participant_ids jsonb not null default '[]'::jsonb;
 
 comment on table public.lottery_event_secrets is
   'PRIVATE operator-only settings (the one-time predetermined winner). Readable only by the event owner.';
@@ -148,7 +155,7 @@ set search_path = ''
 as $$
 begin
   -- The predetermined winner must never be stored in the public data column.
-  new.data := new.data - 'overrideParticipantId' - 'overrideActivated';
+  new.data := new.data - 'overrideParticipantId' - 'overrideActivated' - 'excludedParticipantIds';
 
   if pg_catalog.octet_length(new.data::text) > 5000000 then
     raise exception 'The event data is too large.';
@@ -207,6 +214,21 @@ begin
         from pg_catalog.jsonb_array_elements(new.data -> 'participants') as p(value)
         where p.value ->> 'id' = s.override_participant_id
       );
+
+    -- Drop excluded ids that are no longer on the roster (removed, cleared or replaced participants).
+    update public.lottery_event_secrets as s
+    set excluded_participant_ids = coalesce((
+          select pg_catalog.jsonb_agg(x.id_value)
+          from pg_catalog.jsonb_array_elements(s.excluded_participant_ids) as x(id_value)
+          where exists (
+            select 1
+            from pg_catalog.jsonb_array_elements(new.data -> 'participants') as p(value)
+            where p.value ->> 'id' = x.id_value #>> '{}'
+          )
+        ), '[]'::jsonb),
+        updated_at = pg_catalog.now()
+    where s.event_id = new.id
+      and pg_catalog.jsonb_array_length(s.excluded_participant_ids) > 0;
   end if;
   return null;
 end;
@@ -238,6 +260,7 @@ declare
   v_secret public.lottery_event_secrets%rowtype;
   v_uid uuid := auth.uid();
   v_participants jsonb;
+  v_pool jsonb;
   v_selected jsonb;
   v_mode text;
   v_total numeric;
@@ -293,11 +316,21 @@ begin
     end if;
   end if;
 
-  -- 2) Otherwise: secure weighted random selection (uniform when all weights are 1).
+  -- 2) Otherwise: secure weighted random selection (uniform when all weights are 1) among the participants
+  --    the operator has NOT excluded from the random draw.
   if v_selected is null then
+    select coalesce(pg_catalog.jsonb_agg(p.value order by p.ordinality), '[]'::jsonb)
+    into v_pool
+    from pg_catalog.jsonb_array_elements(v_participants) with ordinality as p(value, ordinality)
+    where not pg_catalog.jsonb_exists(coalesce(v_secret.excluded_participant_ids, '[]'::jsonb), p.value ->> 'id');
+
+    if pg_catalog.jsonb_array_length(v_pool) = 0 then
+      raise exception 'Every remaining participant is excluded from the random draw. Remove someone from the excluded list first.';
+    end if;
+
     select sum((p.value ->> 'weight')::numeric), count(distinct (p.value ->> 'weight')::numeric)
     into v_total, v_distinct_weights
-    from pg_catalog.jsonb_array_elements(v_participants) as p(value);
+    from pg_catalog.jsonb_array_elements(v_pool) as p(value);
 
     if v_total is null or v_total <= 0 then
       raise exception 'The participant list has invalid weights.';
@@ -311,7 +344,7 @@ begin
 
     for v_participant in
       select p.value
-      from pg_catalog.jsonb_array_elements(v_participants) with ordinality as p(value, ordinality)
+      from pg_catalog.jsonb_array_elements(v_pool) with ordinality as p(value, ordinality)
       order by p.ordinality
     loop
       v_running := v_running + (v_participant ->> 'weight')::numeric;
@@ -323,7 +356,7 @@ begin
 
     if v_selected is null then
       -- Floating-point edge: fall back to the last participant rather than failing the draw.
-      v_selected := v_participants -> (pg_catalog.jsonb_array_length(v_participants) - 1);
+      v_selected := v_pool -> (pg_catalog.jsonb_array_length(v_pool) - 1);
     end if;
     v_mode := case when v_distinct_weights > 1 then 'weighted' else 'random' end;
   end if;
@@ -720,6 +753,49 @@ begin
 end;
 $$;
 
+create or replace function public.set_lottery_excluded(p_event_id uuid, p_participant_ids text[])
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_event public.lottery_events%rowtype;
+  v_ids jsonb;
+begin
+  select * into v_event from public.lottery_events where id = p_event_id for update;
+  if not found then
+    raise exception 'Lottery event not found.';
+  end if;
+  if auth.uid() is null or auth.uid() <> v_event.owner_id then
+    raise exception 'Only the event owner can change the excluded list.';
+  end if;
+  if v_event.is_drawing then
+    raise exception 'Wait until the current draw has finished.';
+  end if;
+  if pg_catalog.cardinality(coalesce(p_participant_ids, array[]::text[])) > 20000 then
+    raise exception 'Too many excluded participants.';
+  end if;
+
+  -- keep only ids that are really on the roster, each once
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(t.id)), '[]'::jsonb)
+  into v_ids
+  from (
+    select distinct i.id
+    from pg_catalog.unnest(coalesce(p_participant_ids, array[]::text[])) as i(id)
+    join pg_catalog.jsonb_array_elements(v_event.data -> 'participants') as p(value) on p.value ->> 'id' = i.id
+  ) as t;
+
+  insert into public.lottery_event_secrets (event_id, excluded_participant_ids, updated_at)
+  values (p_event_id, v_ids, pg_catalog.now())
+  on conflict (event_id) do update
+    set excluded_participant_ids = excluded.excluded_participant_ids,
+        updated_at = excluded.updated_at;
+
+  return pg_catalog.jsonb_build_object('excludedParticipantIds', v_ids);
+end;
+$$;
+
 create or replace function public.cancel_lottery_draw(p_event_id uuid)
 returns jsonb
 language plpgsql
@@ -755,6 +831,7 @@ revoke all on function public.finish_lottery_draw(uuid, uuid) from public;
 revoke all on function public.import_lottery_participants(uuid, text[], text, boolean, numeric[]) from public;
 revoke all on function public.manage_lottery_participants(uuid, text, text, text) from public;
 revoke all on function public.set_lottery_override(uuid, text, boolean) from public;
+revoke all on function public.set_lottery_excluded(uuid, text[]) from public;
 revoke all on function public.cancel_lottery_draw(uuid) from public;
 
 -- Audience screens may draw and manage the roster unless the operator disables it in Settings; the
@@ -766,6 +843,7 @@ grant execute on function public.manage_lottery_participants(uuid, text, text, t
 
 -- Operator-only: signed-in users only (and each function additionally checks event ownership).
 grant execute on function public.set_lottery_override(uuid, text, boolean) to authenticated;
+grant execute on function public.set_lottery_excluded(uuid, text[]) to authenticated;
 grant execute on function public.cancel_lottery_draw(uuid) to authenticated;
 
 -- ---------------------------------------------------------------------------------------------------

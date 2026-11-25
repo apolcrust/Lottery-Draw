@@ -12,7 +12,7 @@ select routine_name from information_schema.routines
 where routine_schema = 'public' and routine_name like '%lottery%' order by 1;
 -- expect: begin_lottery_draw, cancel_lottery_draw, finish_lottery_draw, import_lottery_participants,
 --         lottery_events_after_insert, lottery_events_after_update, lottery_events_before_write,
---         manage_lottery_participants, set_lottery_override
+--         manage_lottery_participants, set_lottery_excluded, set_lottery_override
 ```
 
 ## 2. Row Level Security is on
@@ -42,8 +42,8 @@ select has_table_privilege('anon', 'public.lottery_draws', 'select')          as
 ```sql
 select p.proname, has_function_privilege('anon', p.oid, 'execute') as anon, has_function_privilege('authenticated', p.oid, 'execute') as authenticated
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public' and p.proname in ('begin_lottery_draw','finish_lottery_draw','import_lottery_participants','manage_lottery_participants','set_lottery_override','cancel_lottery_draw');
--- first four: anon = true; set_lottery_override and cancel_lottery_draw: anon = false
+where n.nspname = 'public' and p.proname in ('begin_lottery_draw','finish_lottery_draw','import_lottery_participants','manage_lottery_participants','set_lottery_override','set_lottery_excluded','cancel_lottery_draw');
+-- first four: anon = true; set_lottery_override, set_lottery_excluded and cancel_lottery_draw: anon = false
 ```
 
 ## 6. Inspect a draw while testing
@@ -53,6 +53,13 @@ from public.lottery_events e left join public.lottery_draws d on d.event_id = e.
 order by e.updated_at desc limit 5;
 ```
 (`lottery_draws.selected_participant` is the hidden winner; only you, in the SQL editor, can see it.)
+
+## 7. The excluded-names column exists
+```sql
+select column_name from information_schema.columns
+where table_schema = 'public' and table_name = 'lottery_event_secrets' order by 1;
+-- must include excluded_participant_ids
+```
 
 ## Troubleshooting
 
@@ -66,6 +73,8 @@ order by e.updated_at desc limit 5;
 | No email arrives | Default sender is rate-limited; check spam; configure SMTP. |
 | Live updates do not arrive, "Live updates could not connect" | Check query 3; check the project is not paused (free projects pause after inactivity). |
 | `function pg_catalog.unnest(text[], numeric[]) does not exist` when importing | You are running an older `schema.sql`. Re-run the latest one (the import is now a single fast query and handles thousands of names). |
+| `Could not find the function public.set_lottery_excluded` or `column ... excluded_participant_ids does not exist` | The latest `schema.sql` has not been run yet. Run it in the SQL Editor. |
+| `Every remaining participant is excluded from the random draw` | Everyone left on the list is on the operator's excluded list. Remove someone from the excluded list in the operator console. |
 | `A draw is already in progress` | Another device is drawing. Stuck for over 2 minutes? It expires automatically, or use **Cancel draw in progress** in the operator console. |
 | `The draw is not ready to be revealed yet` | The app waits and retries itself; the server enforces the configured duration. |
 | `Only the event operator can ...` | The operator switched off audience drawing / roster editing in Settings. Sign in as the owner on the audience page or switch the option back on. |

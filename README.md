@@ -39,11 +39,12 @@ Other devices watching the event play the same mixing and reveal sequence and sh
 
 ## The animation
 
-The lottery machine is drawn live in code on an HTML canvas (no GIF or image is shown on the page): a black cabinet with a glass chamber, a frosted side panel, an air inlet, a transparent selection tube with a red light, and 60 numbered balls with real physics (gravity, bounces, collisions, an air jet). The balls rest in a pile while idle, are tossed around by the air for the whole mixing time, and at the reveal the air fades and one ball is guided into the tube, rises to the top, and is pulled into focus with its number. It scales to any screen size and stays sharp on high-density displays. See `src/components/LotteryMachine.tsx` (drawing) and `src/machinePhysics.ts` (physics, unit-tested).
+The lottery machine is a 3D **crystal globe on an obsidian pedestal**, drawn live in code on an HTML canvas (no image or GIF is used): a clear glass sphere with reflections, a champagne collar, a glossy floor with an air hub, a colour-changing LED ring (teal while waiting, amber while mixing, gold at the reveal), a glass chimney on top, and 64 numbered lacquer balls. The scene uses a real perspective camera: balls are depth-sorted, shrink and darken toward the back of the globe, and cast shadows on the floor. A 3D physics simulation (gravity, bounces, collisions, an air jet that forms a fountain with a swirl) tosses them around for the whole mixing time. At the reveal the air fades, one ball is lifted up into the chimney, and then it is pulled into focus with its number, followed by the winner card and confetti. It scales to any screen size and stays sharp on high-density displays. See `src/components/LotteryMachine.tsx` (drawing), `src/machineCamera.ts` (perspective) and `src/machinePhysics.ts` (physics, unit-tested).
 
 ## Security model (improved over the Wheel of Fortune schema)
 
 * **Pending winner is private.** In the old schema `pending_winner` was readable by everyone. Here it lives in `lottery_draws`, which no API role can read.
+* **Excluded names are private.** The operator's list of names that cannot win the random draw lives in the same owner-only table; `begin_lottery_draw` skips them, and the audience can never read it.
 * **Predetermined winner is private.** It is stored in `lottery_event_secrets` (owner-readable only) through the owner-only `set_lottery_override` function, so it is never in the publicly readable, realtime-broadcast event data. A trigger also strips those keys from `data` if anything tries to write them.
 * **One draw at a time**, enforced by a unique partial index; abandoned draws expire after 2 minutes; the owner can cancel a stuck draw.
 * **Roster and history are frozen during a draw.** The roster cannot change while a draw is reserved.
@@ -54,7 +55,7 @@ Known trade-off: event rows are readable by anyone holding the project's publish
 
 ## Features
 
-Participants (add, remove, edit names and **weights**, clear, deduplicate, XLSX/XLS/CSV import with worksheet and name/weight column selection, preview, append/replace, export); winners (history, search, export, restore, clear, auto-remove, the winner's participant number and draw order (how a winner was chosen is shown to the operator only)); events (create, list, delete, audience and operator links, live sync); operator console (magic-link sign-in, hidden predetermined-winner shortcut, settings, backup and restore, reset); presentation (fullscreen, music and sound effects, confetti, custom title, responsive layout).
+Participants (add, remove, edit names and **weights**, clear, deduplicate, XLSX/XLS/CSV import with worksheet and name/weight column selection, preview, append/replace, export); winners (history, search, export, restore, clear, auto-remove, the winner's participant number and draw order (how a winner was chosen is shown to the operator only)); events (create, list, delete, audience and operator links, live sync); operator console (magic-link sign-in, an **excluded-from-random-draw list**, hidden predetermined-winner shortcut, settings, backup and restore, reset); presentation (fullscreen, music and sound effects, confetti, custom title, responsive layout).
 
 ## Tests
 

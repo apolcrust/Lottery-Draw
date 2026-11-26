@@ -32,15 +32,15 @@ describe("validateData", () => {
     const base = structuredClone(DEFAULT_DATA);
     expect(() => validateData({ ...base, settings: { ...base.settings, duration: 2 } })).toThrow("invalid lottery settings");
     expect(() => validateData({ ...base, settings: { ...base.settings, duration: 31 } })).toThrow("invalid lottery settings");
-    expect(() => validateData({ ...base, participants: [{ id: "a", name: "Ada", weight: 0 }] })).toThrow("invalid participant");
-    expect(() => validateData({ ...base, winners: [{ participant: { id: "a", name: "Ada", weight: 1 }, drawNumber: 1, timestamp: "t", mode: "magic" }] }))
+    expect(() => validateData({ ...base, participants: [{ id: "a", name: "Ada", weight: 0, number: 1 }] })).toThrow("invalid participant");
+    expect(() => validateData({ ...base, winners: [{ participant: { id: "a", name: "Ada", weight: 1, number: 1 }, drawNumber: 1, timestamp: "t", mode: "magic" }] }))
       .toThrow("invalid winner record");
   });
 
   it("migrates winner records and drops wheel-only settings from original Wheel of Fortune backups", () => {
     const legacy = {
       participants: [],
-      winners: [{ participant: { id: "a", name: "Ada", weight: 1 }, spinNumber: 4, timestamp: "2026-01-01T00:00:00Z", mode: "random" }],
+      winners: [{ participant: { id: "a", name: "Ada", weight: 1, number: 1 }, spinNumber: 4, timestamp: "2026-01-01T00:00:00Z", mode: "random" }],
       settings: { ...DEFAULT_DATA.settings, rotations: 6, background: "#111014", textColor: "#fff8e9", borderColor: "#e5c27c" },
     };
     const result = validateData(legacy);
@@ -55,7 +55,7 @@ describe("validateData", () => {
 });
 
 describe("winner ticket numbers", () => {
-  const person = { id: "a", name: "Ada", weight: 1 };
+  const person = { id: "a", name: "Ada", weight: 1, number: 1 };
   const base = () => structuredClone(DEFAULT_DATA);
 
   it("keeps the participant number stored with each winner", () => {
@@ -71,7 +71,7 @@ describe("winner ticket numbers", () => {
 });
 
 describe("excluded participants", () => {
-  const people = [{ id: "a", name: "Ada", weight: 1 }, { id: "b", name: "Ben", weight: 1 }];
+  const people = [{ id: "a", name: "Ada", weight: 1, number: 1 }, { id: "b", name: "Ben", weight: 1, number: 1 }];
   it("keeps valid excluded ids and drops unknown or duplicate ones", () => {
     const result = validateData({ ...structuredClone(DEFAULT_DATA), participants: people, excludedParticipantIds: ["b", "ghost", "b"] });
     expect(result.excludedParticipantIds).toEqual(["b"]);
@@ -81,9 +81,35 @@ describe("excluded participants", () => {
   });
 });
 
+describe("permanent participant numbers", () => {
+  const base = () => structuredClone(DEFAULT_DATA);
+
+  it("keeps each participant's number and the counter exactly as stored", () => {
+    const result = validateData({ ...base(), participants: [{ id: "b", name: "Ben", weight: 1, number: 7 }, { id: "d", name: "Dev", weight: 1, number: 12 }], nextNumber: 20 });
+    expect(result.participants.map((p) => p.number)).toEqual([7, 12]);
+    expect(result.nextNumber).toBe(20);
+  });
+
+  it("numbers people who have no number yet, after the highest existing number, and never reuses one", () => {
+    const result = validateData({ ...base(), participants: [{ id: "a", name: "Ada", weight: 1 }, { id: "b", name: "Ben", weight: 1, number: 5 }, { id: "c", name: "Cleo", weight: 1 }] });
+    expect(result.participants.map((p) => p.number)).toEqual([6, 5, 7]);
+    expect(result.nextNumber).toBe(8);
+  });
+
+  it("never lets the counter fall behind the numbers in use", () => {
+    const result = validateData({ ...base(), participants: [{ id: "a", name: "Ada", weight: 1, number: 9 }], nextNumber: 2 });
+    expect(result.nextNumber).toBe(10);
+  });
+
+  it("gives older winner records a participant number from their ticket number", () => {
+    const result = validateData({ ...base(), winners: [{ participant: { id: "a", name: "Ada", weight: 1 }, drawNumber: 1, ticketNumber: 4, timestamp: "t", mode: "random" }] });
+    expect(result.winners[0].participant.number).toBe(4);
+  });
+});
+
 describe("publicEventData", () => {
   it("removes the operator-only predetermined winner", () => {
     const data = { ...structuredClone(DEFAULT_DATA), overrideParticipantId: "x", overrideActivated: true, excludedParticipantIds: ["y"] };
-    expect(Object.keys(publicEventData(data)).sort()).toEqual(["participants", "settings", "winners"]);
+    expect(Object.keys(publicEventData(data)).sort()).toEqual(["nextNumber", "participants", "settings", "winners"]);
   });
 });

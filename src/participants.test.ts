@@ -3,9 +3,9 @@ import { findDuplicateParticipantIds, normalizeParticipantName, removeDuplicateP
 import type { Participant } from "./types";
 
 const participants: Participant[] = [
-  { id: "first", name: "  Alex Kim ", weight: 1 },
-  { id: "second", name: "alex kim", weight: 2 },
-  { id: "third", name: "Taylor", weight: 1 },
+  { id: "first", name: "  Alex Kim ", weight: 1, number: 1 },
+  { id: "second", name: "alex kim", weight: 2, number: 1 },
+  { id: "third", name: "Taylor", weight: 1, number: 1 },
 ];
 
 describe("participant duplicate handling", () => {

@@ -1,4 +1,4 @@
-import { DEFAULT_DATA, DEFAULT_SETTINGS, MAX_DURATION_SECONDS, MIN_DURATION_SECONDS, type AppData, type LotterySettings } from "./types";
+import { DEFAULT_DATA, DEFAULT_SETTINGS, MAX_DURATION_SECONDS, MIN_DURATION_SECONDS, type AppData, type LotterySettings, type Participant } from "./types";
 
 const DATABASE = "lottery-ball-system";
 const STORE = "session";
@@ -46,6 +46,8 @@ export async function saveData(data: AppData): Promise<void> {
 }
 
 const HEX = /^#[0-9a-f]{6}$/i;
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value > 0;
 
 function isParticipant(participant: unknown): boolean {
   if (!participant || typeof participant !== "object") return false;
@@ -117,7 +119,9 @@ export function validateData(value: unknown, source: DataSource = "backup file")
     // Older records have no ticketNumber; fall back to the draw order so they still display.
     const ticketNumber = typeof entry.ticketNumber === "number" && Number.isInteger(entry.ticketNumber) && entry.ticketNumber > 0
       ? entry.ticketNumber : drawNumber;
-    return { participant: entry.participant, drawNumber, ticketNumber, timestamp: entry.timestamp, mode: entry.mode };
+    const snapshot = entry.participant as Participant;
+    const participant = isNumber((snapshot as { number?: unknown }).number) ? snapshot : { ...snapshot, number: ticketNumber };
+    return { participant, drawNumber, ticketNumber, timestamp: entry.timestamp, mode: entry.mode };
   });
   if (winners.some((winner) => winner === null)) throw new Error(`${sourceLabel} contains an invalid winner record.`);
   const settings = cleanSettings(candidate.settings, sourceLabel);
@@ -127,11 +131,18 @@ export function validateData(value: unknown, source: DataSource = "backup file")
   if (typeof overrideId === "string" && !ids.has(overrideId)) {
     throw new Error(`${sourceLabel} has a one-time pick that is not an active participant.`);
   }
+  // Permanent participant numbers: keep existing ones, give any participant without one the next free number.
+  let counter = candidate.participants.reduce((highest, person) => isNumber((person as { number?: unknown }).number) ? Math.max(highest, (person as { number: number }).number) : highest, 0);
+  const numbered = candidate.participants.map((person) =>
+    isNumber((person as { number?: unknown }).number) ? person : { ...person, number: ++counter });
+  const declaredNext = (candidate as { nextNumber?: unknown }).nextNumber;
+  const nextNumber = Math.max(isNumber(declaredNext) ? declaredNext : 1, counter + 1);
   const rawExcluded = (candidate as { excludedParticipantIds?: unknown }).excludedParticipantIds;
   const excludedParticipantIds = Array.isArray(rawExcluded)
     ? [...new Set(rawExcluded.filter((id): id is string => typeof id === "string" && ids.has(id)))] : [];
   return {
-    participants: candidate.participants,
+    participants: numbered,
+    nextNumber,
     winners: winners as AppData["winners"],
     settings,
     excludedParticipantIds,
@@ -142,5 +153,5 @@ export function validateData(value: unknown, source: DataSource = "backup file")
 
 /** The shape stored in the shared, publicly readable lottery_events.data column: no operator secrets. */
 export function publicEventData(data: AppData): Omit<AppData, "overrideParticipantId" | "overrideActivated" | "excludedParticipantIds"> {
-  return { participants: data.participants, winners: data.winners, settings: data.settings };
+  return { participants: data.participants, nextNumber: data.nextNumber, winners: data.winners, settings: data.settings };
 }

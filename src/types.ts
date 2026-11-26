@@ -3,6 +3,8 @@ export type SelectionMode = "random" | "weighted" | "controlled";
 export interface Participant {
   id: string;
   name: string;
+  /** Permanent number of this participant. It never changes when other participants are removed. */
+  number: number;
   /** Relative chance of being drawn. 1 = a normal ticket; 3 = three times as likely. */
   weight: number;
 }
@@ -36,6 +38,8 @@ export interface LotterySettings {
 
 export interface AppData {
   participants: Participant[];
+  /** The number the next added participant receives (numbers are never reused while the list exists). */
+  nextNumber: number;
   winners: Winner[];
   settings: LotterySettings;
   /**
@@ -68,6 +72,7 @@ export const DEFAULT_SETTINGS: LotterySettings = {
 
 export const DEFAULT_DATA: AppData = {
   participants: [],
+  nextNumber: 1,
   winners: [],
   settings: DEFAULT_SETTINGS,
   overrideParticipantId: null,

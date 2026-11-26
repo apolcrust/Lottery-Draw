@@ -5,7 +5,7 @@ import {
 } from "../machineCamera";
 import {
   BALL_COUNT, FLOOR_Y, GLOBE_RADIUS, TUBE_BOTTOM_Y, TUBE_RADIUS, TUBE_TOP_BALL_Y, TUBE_TOP_Y,
-  beginReveal, createSim, sampleLabels, settleSim, stepSim, type Ball, type Sim,
+  beginReveal, createSim, sampleNumbers, settleSim, stepSim, type Ball, type Sim,
 } from "../machinePhysics";
 
 interface LotteryMachineProps {
@@ -17,7 +17,8 @@ interface LotteryMachineProps {
   colors: string[];
   /** Called once when the "ball rises through the chimney and is pulled into focus" sequence has finished. */
   onRevealComplete: () => void;
-  participantCount: number;
+  /** The permanent numbers of the participants; the balls in the machine carry real participant numbers. */
+  participantNumbers: number[];
 }
 
 // Where the winning ball sits at the top of the chimney, as a share of the machine's size.
@@ -314,7 +315,7 @@ function ledColor(phase: MachinePhase, now: number): { rgb: string; alpha: numbe
  *   revealed  -> the winning ball stays in focus
  * The machine only presents the draw; the winner is decided by the database / selection engine.
  */
-export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealComplete, participantCount }: LotteryMachineProps) {
+export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealComplete, participantNumbers }: LotteryMachineProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<Sim | null>(null);
   const layersRef = useRef<{ back: HTMLCanvasElement; front: HTMLCanvasElement } | null>(null);
@@ -326,8 +327,10 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
   const labelRef = useRef({ ballLabel, ballColor });
   labelRef.current = { ballLabel, ballColor };
   const colorsKey = colors.join("|");
-  const countRef = useRef(participantCount);
-  countRef.current = participantCount;
+  const numbersRef = useRef(participantNumbers);
+  numbersRef.current = participantNumbers;
+  const numbersKey = participantNumbers.join(",");
+  const participantCount = participantNumbers.length;
   const completeRef = useRef(onRevealComplete);
   completeRef.current = onRevealComplete;
   const [focus, setFocus] = useState<"off" | "animating" | "done">("off");
@@ -465,7 +468,7 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
 
   const rebuildPile = () => {
     // the balls carry random participant numbers, coloured like the participant's marker on the list
-    const sim = createSim(colors, Math.random, BALL_COUNT, sampleLabels(Math.max(1, countRef.current), BALL_COUNT));
+    const sim = createSim(colors, Math.random, BALL_COUNT, sampleNumbers(numbersRef.current, BALL_COUNT));
     settleSim(sim);
     simRef.current = sim;
     spritesRef.current = new Map();
@@ -511,7 +514,7 @@ export function LotteryMachine({ phase, ballLabel, ballColor, colors, onRevealCo
       draw();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorsKey, participantCount]);
+  }, [colorsKey, numbersKey]);
 
   // the winner's number can arrive while the ball is already rising: update the ball in the chimney
   useEffect(() => {

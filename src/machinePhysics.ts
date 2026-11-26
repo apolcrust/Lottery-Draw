@@ -64,13 +64,15 @@ export function paletteColor(colors: readonly string[], number: number): string 
   return palette[(Math.max(1, number) - 1) % palette.length];
 }
 
-/** Numbers printed on the machine's balls: random participant numbers from 1..total (unique when possible). */
-export function sampleLabels(total: number, count: number, rng: () => number = Math.random): number[] {
-  const size = Math.max(1, Math.floor(total));
-  if (size <= count) return Array.from({ length: count }, (_, i) => (i % size) + 1);
-  const picked = new Set<number>();
-  while (picked.size < count) picked.add(1 + Math.floor(rng() * size));
-  return [...picked];
+/** Numbers printed on the machine's balls: random participant numbers from the real list (unique when possible). */
+export function sampleNumbers(numbers: readonly number[], count: number, rng: () => number = Math.random): number[] {
+  const pool = numbers.length ? [...numbers] : [1];
+  if (pool.length <= count) return Array.from({ length: count }, (_, i) => pool[i % pool.length]);
+  for (let i = 0; i < count; i += 1) {
+    const j = i + Math.floor(rng() * (pool.length - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, count);
 }
 
 export function createSim(colors: readonly string[], rng: () => number = Math.random, count = BALL_COUNT, labels?: readonly number[]): Sim {

@@ -34,8 +34,8 @@ type RemoteDraw = { mixTimer: number; fallbackTimer: number; mixDone: boolean; w
 type LocalPick = { participant: Participant; mode: Winner["mode"]; ticketNumber: number };
 type DrawOutcome = { winner: Winner; completed: AppData | null };
 
-function makeParticipant(name: string, weight = 1): Participant {
-  return { id: crypto.randomUUID(), name: name.trim(), weight };
+function makeParticipant(name: string, weight: number, number: number): Participant {
+  return { id: crypto.randomUUID(), name: name.trim(), weight, number };
 }
 
 function playTone(frequency: number, duration: number, volume: number) {
@@ -186,7 +186,7 @@ function App() {
     } catch (error) {
       notify(errorText(error, "The music preference could not be saved."), "error");
     }
-    if (enabled && (machinePhase === "mixing" || machinePhase === "revealing" || machinePhase === "revealed")) startMusic(true);
+    if (enabled && (machinePhase === "mixing" || machinePhase === "revealing")) startMusic(true);
     else stopMusic();
   };
 
@@ -200,6 +200,7 @@ function App() {
 
   // ----- presenting a finished draw -----------------------------------------------------------------------
   const showWinner = useCallback((winner: Winner, settings: LotterySettings) => {
+    stopMusic();
     lastWinnerKeyRef.current = winnerKey(winner);
     setBallNumber(winner.ticketNumber);
     setMachinePhase("revealed");
@@ -593,6 +594,7 @@ function App() {
       .filter(({ participant }) => participant.name.toLocaleLowerCase().includes(query));
   }, [data.participants, overrideSearch]);
   const selectedOverrideParticipant = data.participants.find((person) => person.id === data.overrideParticipantId);
+  const participantNumbers = useMemo(() => data.participants.map((person) => person.number), [data.participants]);
   const excludedSet = useMemo(() => new Set(data.excludedParticipantIds), [data.excludedParticipantIds]);
   const excludedParticipants = useMemo(
     () => data.participants.map((participant, index) => ({ participant, index })).filter(({ participant }) => excludedSet.has(participant.id)),
@@ -812,7 +814,7 @@ function App() {
         setServerDrawing(true);
       } else {
         const selection = selectWinner(data.participants, data.overrideParticipantId, data.overrideActivated, data.excludedParticipantIds);
-        local = { participant: data.participants[selection.index], mode: selection.mode, ticketNumber: selection.index + 1 };
+        local = { participant: data.participants[selection.index], mode: selection.mode, ticketNumber: data.participants[selection.index].number };
         ticket = {
           drawId: crypto.randomUUID(),
           startedAt: new Date().toISOString(),
@@ -893,7 +895,11 @@ function App() {
         return;
       }
     } else {
-      setData((current) => ({ ...current, participants: [...current.participants, makeParticipant(name)] }));
+      setData((current) => ({
+        ...current,
+        participants: [...current.participants, makeParticipant(name, 1, current.nextNumber)],
+        nextNumber: current.nextNumber + 1,
+      }));
     }
     setNewName("");
     notify(`${name} added to the draw.`);
@@ -929,7 +935,7 @@ function App() {
         }
       } else {
         if (dataRef.current.overrideParticipantId) commitOverride(null, false);
-        setData((current) => ({ ...current, participants: [] }));
+        setData((current) => ({ ...current, participants: [], nextNumber: 1 }));
       }
       notify(`Cleared ${count} participant${count === 1 ? "" : "s"} from the draw.`);
     })();
@@ -1067,12 +1073,17 @@ function App() {
           }));
         }
       } else {
-        const incoming = entries.map((entry) => makeParticipant(entry.name, canEditEvent ? entry.weight : 1));
         if (importAction === "replace" && dataRef.current.overrideParticipantId) commitOverride(null, false);
-        setData((current) => ({
-          ...current,
-          participants: importAction === "replace" ? incoming : [...current.participants, ...incoming],
-        }));
+        setData((current) => {
+          // every imported participant gets a permanent number; a replace starts numbering again from 1
+          const base = importAction === "replace" ? 1 : current.nextNumber;
+          const incoming = entries.map((entry, position) => makeParticipant(entry.name, canEditEvent ? entry.weight : 1, base + position));
+          return {
+            ...current,
+            participants: importAction === "replace" ? incoming : [...current.participants, ...incoming],
+            nextNumber: base + incoming.length,
+          };
+        });
       }
     } catch (error) {
       notify(errorText(error, "The spreadsheet participants could not be imported."), "error");
@@ -1089,7 +1100,7 @@ function App() {
 
   const exportParticipants = async () => {
     const XLSX = await import("xlsx");
-    const sheet = XLSX.utils.json_to_sheet(data.participants.map(({ id, name, weight }) => ({ ID: id, Name: name, Weight: weight })));
+    const sheet = XLSX.utils.json_to_sheet(data.participants.map(({ id, name, weight, number }) => ({ Number: number, ID: id, Name: name, Weight: weight })));
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, "Participants");
     XLSX.writeFile(book, "lottery-ball-participants.xlsx");
@@ -1159,7 +1170,16 @@ function App() {
     if (drawLocked) return;
     const record = data.winners.find((entry) => entry.participant.id === id);
     if (!record || data.participants.some((person) => person.id === id)) return;
-    setData((current) => ({ ...current, participants: [...current.participants, record.participant] }));
+    setData((current) => {
+      // the participant keeps their original number; only if someone else now has it do they get a new one
+      const taken = current.participants.some((person) => person.number === record.participant.number);
+      const restored = taken ? { ...record.participant, number: current.nextNumber } : record.participant;
+      return {
+        ...current,
+        participants: [...current.participants, restored],
+        nextNumber: Math.max(current.nextNumber, restored.number + 1),
+      };
+    });
     notify(`${record.participant.name} restored to the draw.`);
   };
 
@@ -1348,7 +1368,7 @@ function App() {
   const machine = <div className="machine-stage">
     <LotteryMachine phase={machinePhase} ballLabel={formatTicket(ballNumber)} ballColor={ballColor}
       colors={data.settings.colors}
-      participantCount={data.participants.length} onRevealComplete={handleRevealComplete} />
+      participantNumbers={participantNumbers} onRevealComplete={handleRevealComplete} />
     <div className={`draw-status${drawActive ? " is-active" : ""}`} role="status" aria-live="polite">{drawStatus}</div>
   </div>;
 
@@ -1413,7 +1433,7 @@ function App() {
         </div>
         {data.participants.length === 0 ? <div className="empty-state"><FileSpreadsheet size={22} /><p>No participants yet. Add names or import a spreadsheet.</p></div> :
           <div className="participant-list">{data.participants.map((person, index) => <div className="participant-row" key={person.id}>
-            <span className="row-index">{String(index + 1).padStart(2, "0")}</span>
+            <span className="row-index">{formatTicket(person.number)}</span>
             {isOperator ? <>
               <input aria-label={`Participant ${index + 1} name`} value={person.name} maxLength={100} disabled={drawLocked}
                 onChange={(event) => updateParticipant(person.id, { name: event.target.value })} />
@@ -1562,9 +1582,9 @@ function App() {
             <div className="public-card-heading"><div><span className="card-overline">IN THE MACHINE</span><h2>Participants</h2></div>
               <span className="public-count">{data.participants.length}</span></div>
             {data.participants.length === 0 ? <p className="public-empty-copy">Add names to see them here and in the machine.</p> :
-              <ul className="public-participant-list">{data.participants.map((person, index) => <li key={person.id}>
-                <span className={`mini-ball mini-ball-sm digits-${Math.min(3, String(index + 1).length)}`}
-                  style={{ ["--ball-color" as string]: ballColorFor(data.settings.colors, index + 1) }}><b>{formatTicket(index + 1)}</b></span>
+              <ul className="public-participant-list">{data.participants.map((person) => <li key={person.id}>
+                <span className={`mini-ball mini-ball-sm digits-${Math.min(3, String(person.number).length)}`}
+                  style={{ ["--ball-color" as string]: ballColorFor(data.settings.colors, person.number) }}><b>{formatTicket(person.number)}</b></span>
                 <span>{person.name}</span><small>{person.weight > 1 ? `×${person.weight}` : ""}</small>
               </li>)}</ul>}
             <div className="public-participant-actions">
@@ -1585,7 +1605,7 @@ function App() {
           </section>
         </aside>
       </section>
-      <footer className="public-footer">LUCKY DRAW - 2026</footer>
+      <footer className="public-footer">Lottery Ball System - 2026</footer>
       {winnerOverlay}
       {dialogs}
       {toastStack}
@@ -1654,11 +1674,11 @@ function App() {
             {data.participants.length === 0 ? <p className="override-empty">Add participants before choosing a one-time pick.</p> :
               filteredOverrideParticipants.length === 0 ? <p className="override-empty">No participants match “{overrideSearch.trim()}”.</p> :
                 <div className="override-participant-list" role="listbox" aria-label="Predetermined winner">
-                  {filteredOverrideParticipants.map(({ participant, index }) => {
+                  {filteredOverrideParticipants.map(({ participant }) => {
                     const selected = participant.id === data.overrideParticipantId;
                     return <button className={`override-participant${selected ? " is-selected" : ""}`} type="button" role="option"
                       aria-selected={selected} key={participant.id} disabled={drawLocked} onClick={() => commitOverride(participant.id, false)}>
-                      <span className="override-participant-index">{index + 1}</span>
+                      <span className="override-participant-index">{participant.number}</span>
                       <span className="override-participant-name">{participant.name}</span>
                       {participant.weight !== 1 && <small>×{participant.weight}</small>}
                       {selected && <Check size={16} aria-hidden="true" />}
@@ -1683,11 +1703,11 @@ function App() {
             {data.participants.length === 0 ? <p className="override-empty">Add participants first.</p> :
               filteredExcludeParticipants.length === 0 ? <p className="override-empty">No participants match “{excludeSearch.trim()}”.</p> :
                 <div className="override-participant-list exclude-pick-list" role="listbox" aria-multiselectable="true" aria-label="Participants to exclude from the random draw">
-                  {filteredExcludeParticipants.map(({ participant, index }) => {
+                  {filteredExcludeParticipants.map(({ participant }) => {
                     const excluded = excludedSet.has(participant.id);
                     return <button className={`override-participant${excluded ? " is-excluded" : ""}`} type="button" role="option"
                       aria-selected={excluded} key={participant.id} disabled={drawLocked} onClick={() => toggleExcluded(participant.id)}>
-                      <span className="override-participant-index">{index + 1}</span>
+                      <span className="override-participant-index">{participant.number}</span>
                       <span className="override-participant-name">{participant.name}</span>
                       {excluded ? <EyeOff size={15} aria-hidden="true" /> : <Plus size={15} aria-hidden="true" />}
                     </button>;
@@ -1703,8 +1723,8 @@ function App() {
             </div>
             <div className="exclude-summary"><strong>{excludedParticipants.length}</strong> excluded · <strong>{data.participants.length - excludedParticipants.length}</strong> can win the random draw</div>
             {excludedParticipants.length > 0 && <ul className="exclude-chips" aria-label="Excluded participants">
-              {excludedParticipants.map(({ participant, index }) => <li key={participant.id}>
-                <span className="exclude-chip-number">{String(index + 1).padStart(2, "0")}</span>
+              {excludedParticipants.map(({ participant }) => <li key={participant.id}>
+                <span className="exclude-chip-number">{formatTicket(participant.number)}</span>
                 <span className="exclude-chip-name">{participant.name}</span>
                 <button type="button" className="exclude-chip-remove" disabled={drawLocked} aria-label={`Remove ${participant.name} from the excluded list`}
                   onClick={() => toggleExcluded(participant.id)}><X size={13} /></button>

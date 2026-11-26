@@ -12,7 +12,7 @@ select routine_name from information_schema.routines
 where routine_schema = 'public' and routine_name like '%lottery%' order by 1;
 -- expect: begin_lottery_draw, cancel_lottery_draw, finish_lottery_draw, import_lottery_participants,
 --         lottery_events_after_insert, lottery_events_after_update, lottery_events_before_write,
---         manage_lottery_participants, set_lottery_excluded, set_lottery_override
+--         lottery_next_number, manage_lottery_participants, set_lottery_excluded, set_lottery_override
 ```
 
 ## 2. Row Level Security is on
@@ -59,6 +59,14 @@ order by e.updated_at desc limit 5;
 select column_name from information_schema.columns
 where table_schema = 'public' and table_name = 'lottery_event_secrets' order by 1;
 -- must include excluded_participant_ids
+```
+
+## 8. Permanent participant numbers
+```sql
+select id, jsonb_array_length(data -> 'participants') as people, data -> 'nextNumber' as next_number,
+       (select min((p ->> 'number')::int) from jsonb_array_elements(data -> 'participants') p) as lowest_number
+from public.lottery_events order by updated_at desc limit 5;
+-- every event with participants should have next_number set and a lowest_number
 ```
 
 ## Troubleshooting

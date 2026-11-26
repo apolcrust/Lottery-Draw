@@ -243,6 +243,29 @@ revoke all on function public.lottery_events_before_write() from public;
 revoke all on function public.lottery_events_after_insert() from public;
 revoke all on function public.lottery_events_after_update() from public;
 
+-- The next permanent participant number for an event. Numbers never change and are never reused while the
+-- list exists, so a participant keeps the same number when other people are removed.
+create or replace function public.lottery_next_number(p_data jsonb)
+returns integer
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(
+    case when pg_catalog.jsonb_typeof(p_data -> 'nextNumber') = 'number' then (p_data ->> 'nextNumber')::integer end,
+    (
+      select coalesce(
+        max(case when pg_catalog.jsonb_typeof(p.value -> 'number') = 'number' then (p.value ->> 'number')::integer end),
+        pg_catalog.jsonb_array_length(p_data -> 'participants')
+      ) + 1
+      from pg_catalog.jsonb_array_elements(p_data -> 'participants') as p(value)
+    ),
+    1
+  );
+$$;
+
+revoke all on function public.lottery_next_number(jsonb) from public;
+
 -- ---------------------------------------------------------------------------------------------------
 -- 4. begin_lottery_draw
 --    Chooses the winner (secure weighted random, or the armed predetermined winner), stores it privately,
@@ -431,11 +454,16 @@ begin
 
   v_data := v_event.data;
 
-  -- The winner's number on the participant list (before they are removed): this is the number on the ball.
-  select p.ordinality into v_ticket
-  from pg_catalog.jsonb_array_elements(v_data -> 'participants') with ordinality as p(value, ordinality)
-  where p.value ->> 'id' = v_draw.selected_participant ->> 'id'
-  limit 1;
+  -- The winner's permanent participant number: this is the number on the ball.
+  if pg_catalog.jsonb_typeof(v_draw.selected_participant -> 'number') = 'number' then
+    v_ticket := (v_draw.selected_participant ->> 'number')::bigint;
+  else
+    -- participants created before permanent numbers existed: fall back to their position on the list
+    select p.ordinality into v_ticket
+    from pg_catalog.jsonb_array_elements(v_data -> 'participants') with ordinality as p(value, ordinality)
+    where p.value ->> 'id' = v_draw.selected_participant ->> 'id'
+    limit 1;
+  end if;
 
   v_record := pg_catalog.jsonb_build_object(
     'participant', v_draw.selected_participant,
@@ -499,6 +527,8 @@ declare
   v_new jsonb;
   v_participants jsonb;
   v_weights numeric[];
+  v_next integer;
+  v_added integer;
 begin
   if p_action is null or p_action not in ('append', 'replace') then
     raise exception 'Choose whether to add to or replace the participant list.';
@@ -553,8 +583,10 @@ begin
 
   if p_action = 'append' then
     v_existing := v_data -> 'participants';
+    v_next := public.lottery_next_number(v_data);
   else
     v_existing := '[]'::jsonb;
+    v_next := 1;
   end if;
 
   -- One set-based query (fast for thousands of names): number the input rows, drop repeats within the file
@@ -575,16 +607,22 @@ begin
     pg_catalog.jsonb_agg(
       pg_catalog.jsonb_build_object(
         'id', pg_catalog.gen_random_uuid()::text,
-        'name', r.person_name,
-        'weight', r.person_weight
-      ) order by r.ordinal
+        'name', f.person_name,
+        'weight', f.person_weight,
+        'number', v_next + f.sequence_number - 1
+      ) order by f.ordinal
     ),
     '[]'::jsonb
-  )
-  into v_new
-  from ranked as r
-  where p_keep_duplicates
-    or (r.repeat_number = 1 and not exists (select 1 from existing as x where x.name_key = r.name_key));
+  ),
+  coalesce(max(f.sequence_number), 0)
+  into v_new, v_added
+  from (
+    select r.ordinal, r.person_name, r.person_weight,
+           pg_catalog.row_number() over (order by r.ordinal)::integer as sequence_number
+    from ranked as r
+    where p_keep_duplicates
+      or (r.repeat_number = 1 and not exists (select 1 from existing as x where x.name_key = r.name_key))
+  ) as f;
 
   v_participants := v_existing || v_new;
   if pg_catalog.jsonb_array_length(v_participants) > 20000 then
@@ -592,6 +630,7 @@ begin
   end if;
 
   v_data := pg_catalog.jsonb_set(v_data, '{participants}', v_participants, true);
+  v_data := pg_catalog.jsonb_set(v_data, '{nextNumber}', pg_catalog.to_jsonb(v_next + v_added), true);
 
   -- The after-update trigger disarms the one-time pick if its participant is no longer in the roster.
   update public.lottery_events set data = v_data where id = p_event_id;
@@ -620,6 +659,7 @@ declare
   v_data jsonb;
   v_participants jsonb;
   v_name text;
+  v_next integer;
 begin
   if p_action is null or p_action not in ('add', 'remove', 'deduplicate', 'clear') then
     raise exception 'Choose a valid participant management action.';
@@ -664,11 +704,13 @@ begin
     if pg_catalog.jsonb_array_length(v_participants) >= 20000 then
       raise exception 'A lottery event can hold at most 20000 participants.';
     end if;
+    v_next := public.lottery_next_number(v_data);
     v_participants := v_participants || pg_catalog.jsonb_build_array(
       pg_catalog.jsonb_build_object(
         'id', pg_catalog.gen_random_uuid()::text,
         'name', v_name,
-        'weight', 1
+        'weight', 1,
+        'number', v_next
       )
     );
   elsif p_action = 'remove' then
@@ -701,6 +743,11 @@ begin
   end if;
 
   v_data := pg_catalog.jsonb_set(v_data, '{participants}', v_participants, true);
+  if p_action = 'add' then
+    v_data := pg_catalog.jsonb_set(v_data, '{nextNumber}', pg_catalog.to_jsonb(v_next + 1), true);
+  elsif p_action = 'clear' then
+    v_data := pg_catalog.jsonb_set(v_data, '{nextNumber}', pg_catalog.to_jsonb(1), true);
+  end if;
   update public.lottery_events set data = v_data where id = p_event_id;
 
   return v_data;
@@ -845,6 +892,30 @@ grant execute on function public.manage_lottery_participants(uuid, text, text, t
 grant execute on function public.set_lottery_override(uuid, text, boolean) to authenticated;
 grant execute on function public.set_lottery_excluded(uuid, text[]) to authenticated;
 grant execute on function public.cancel_lottery_draw(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------------------------------
+-- 9b. One-time migration: give participants of existing events a permanent number (by their current order).
+--     Events that already have numbers are not touched.
+-- ---------------------------------------------------------------------------------------------------
+
+update public.lottery_events as e
+set data = pg_catalog.jsonb_set(
+      pg_catalog.jsonb_set(
+        e.data, '{participants}',
+        coalesce((
+          select pg_catalog.jsonb_agg(
+                   pg_catalog.jsonb_set(p.value, '{number}', pg_catalog.to_jsonb(p.ordinality::integer), true)
+                   order by p.ordinality)
+          from pg_catalog.jsonb_array_elements(e.data -> 'participants') with ordinality as p(value, ordinality)
+        ), '[]'::jsonb),
+        true),
+      '{nextNumber}', pg_catalog.to_jsonb(pg_catalog.jsonb_array_length(e.data -> 'participants') + 1), true)
+where not e.is_drawing
+  and exists (
+    select 1
+    from pg_catalog.jsonb_array_elements(e.data -> 'participants') as p(value)
+    where pg_catalog.jsonb_typeof(p.value -> 'number') is distinct from 'number'
+  );
 
 -- ---------------------------------------------------------------------------------------------------
 -- 10. Realtime (own subscription on this project only)

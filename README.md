@@ -33,7 +33,7 @@ Without any `.env.local`, the app runs in **local mode** (one browser, data in I
 3. The machine mixes the balls for the configured duration (3 to 30 s, Settings). Frames 1 to 4 of the GIF loop, so it never freezes.
 4. The ball rises through the tube (GIF frames 5 to 8) and is pulled into focus.
 5. `finish_lottery_draw` records the winner. The database refuses to finish before the configured duration has elapsed, and retrying is safe (no duplicate winner).
-6. The winning ball shows the winner's **number on the participant list** (for example 06). The name, congratulation and confetti appear, and Realtime updates every other device. The roster and history on audience screens update only after the reveal.
+6. The winning ball shows the winner's **permanent participant number** (for example 06). Numbers are fixed when a participant is added and never change when other people are removed; new participants continue the count, and replacing or clearing the list restarts it at 1. The name, congratulation and confetti appear, and Realtime updates every other device. The roster and history on audience screens update only after the reveal.
 
 Other devices watching the event play the same mixing and reveal sequence and show the winner when the result arrives. If the drawing tab is refreshed mid-draw it resumes the same draw; if the network drops after the reveal it offers **Retry** and nothing is lost.
 

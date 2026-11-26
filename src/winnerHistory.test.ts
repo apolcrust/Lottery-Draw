@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ballColorFor, formatTicket } from "./ballColors";
 import { winnersInDrawOrder } from "./winnerHistory";
-import { sampleLabels, createSim, createRng } from "./machinePhysics";
+import { sampleNumbers, createSim, createRng } from "./machinePhysics";
 import type { Winner } from "./types";
 
 const winner = (drawNumber: number, name: string, ticketNumber = drawNumber): Winner => ({
-  participant: { id: name, name, weight: 1 }, drawNumber, ticketNumber, timestamp: `2026-11-24T08:3${drawNumber}:00Z`, mode: "random",
+  participant: { id: name, name, weight: 1, number: ticketNumber }, drawNumber, ticketNumber, timestamp: `2026-11-24T08:3${drawNumber}:00Z`, mode: "random",
 });
 
 describe("winner history order", () => {
@@ -32,11 +32,14 @@ describe("participant numbers on the balls", () => {
   });
 
   it("puts real participant numbers on the machine balls (unique when there are enough participants)", () => {
-    const labels = sampleLabels(655, 60, createRng(5));
+    const numbers = Array.from({ length: 655 }, (_, i) => i + 1);
+    const labels = sampleNumbers(numbers, 60, createRng(5));
     expect(labels).toHaveLength(60);
     expect(new Set(labels).size).toBe(60);
     expect(labels.every((n) => n >= 1 && n <= 655)).toBe(true);
-    expect(sampleLabels(3, 6)).toEqual([1, 2, 3, 1, 2, 3]);
+    expect(sampleNumbers([4, 9, 12], 6)).toEqual([4, 9, 12, 4, 9, 12]);
+    // numbers that remain after winners were removed are used as they are, never renumbered
+    expect(sampleNumbers([2, 5], 4)).toEqual([2, 5, 2, 5]);
     const sim = createSim(["#111111", "#222222"], createRng(2), 3, [6, 7, 8]);
     expect(sim.balls.map((b) => b.label)).toEqual(["06", "07", "08"]);
     expect(sim.balls[0].color).toBe(ballColorFor(["#111111", "#222222"], 6));
